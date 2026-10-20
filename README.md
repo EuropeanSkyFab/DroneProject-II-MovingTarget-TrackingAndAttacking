@@ -1,142 +1,120 @@
-# 课题二：面向动态目标的无人机视觉跟踪与自主打击 (系统集成)
+# 课题二：面向动态目标的无人机视觉跟踪与自主打击
 
-欢迎来到课题二的核心代码仓库！本仓库由系统集成（联调）负责维护主干架构。
+本项目为课题二系统集成主仓库。系统基于 **ROS 2 (Humble)** 与 **PX4 (uXRCE-DDS)** 构建。
 
-为了保证团队协作的顺畅，避免代码冲突和环境混乱，请所有成员**务必严格遵守以下开发规范与目录结构**。
+## ⚠️ 核心开发铁律（必读）
 
----
-
-## 1. 环境要求
-- **操作系统**：Ubuntu 22.04 (WSL2 或原生系统)
-- **ROS 2 版本**：Humble
-- **编译工具**：`colcon`
+1. **绝对不要修改别人的包**：每个人在自己的功能包内写代码，严禁跨包修改。
+2. **绝对不要提交编译产物**：仓库根目录已经配置了 `.gitignore`，`build/`、`install/`、`log/` 以及 `__pycache__/` 不会被提交。**千万不要用 `git add -f` 强制提交这些文件夹。**
+3. **必须遵守接口规范**：所有话题名、消息类型、坐标系必须严格遵守团队内部的《接口文档》。
 
 ---
 
-## 2. 代码存放位置（严禁乱放）
+## 📂 仓库目录结构
 
-本仓库是一个标准的 ROS 2 工作空间。**所有的功能包（Package）必须且只能放在 `src/` 目录下！**
+本仓库是一个标准的 ROS 2 工作空间（Workspace），结构如下：
 
-**绝对不要**把 `build/`、`install/`、`log/` 目录提交到 Git 仓库中（仓库根目录已配置 `.gitignore` 自动忽略这些文件夹）。
-
-### 团队分工与包命名规范
-每位成员必须在 `src/` 目录下创建属于自己的独立功能包，**严禁修改他人的功能包**：
-
-- **视觉模块（张嘉芮）**：在 `src/` 下创建 `vision_pkg`
-- **路径规划模块（规划同学）**：在 `src/` 下创建 `planning_pkg`
-- **飞控桥接模块（底层同学）**：在 `src/` 下创建 `fmu_bridge_pkg`
-- **系统集成中枢（赖纳）**：已创建 `center_node_pkg`（请勿修改核心逻辑）
-
----
-
-## 3. 如何克隆与上传代码（Git 标准流程）
-
-### 首次拉取代码
-打开终端，执行以下命令将仓库克隆到本地：
-```bash
-git clone git@github.com:EuropeanSkyFab/DroneProject-II-MovingTarget-TrackingAndAttacking.git
+```text
+ros2_ws/
+├── .gitignore              # Git 忽略规则（已配置好 ROS 2 规则）
+├── README.md               # 本说明文档
+└── src/                    # 所有源码放这里
+    └── center_node_pkg/    # 【系统集成】中枢节点包（赖纳负责）
+        ├── center_node_pkg/
+        │   ├── __init__.py
+        │   └── center_node.py  # 中枢主控逻辑
+        ├── package.xml
+        └── setup.py
 ```
 
-### 日常开发流程（千万别忘）
-每次写代码前，先拉取最新代码；写完代码后，推送到云端：
+---
+
+## 🚀 成员上手指南（How to use）
+
+### 第一步：克隆仓库
+打开你的 WSL Ubuntu 终端，进入你想存放代码的目录（比如 `~/`），执行：
 ```bash
-# 1. 拉取云端最新进度
-git pull origin main
+git clone https://github.com/EuropeanSkyFab/DroneProject-II-MovingTarget-TrackingAndAttacking.git ros2_ws
+cd ros2_ws
+```
 
-# 2. 写你的代码...
+### 第二步：创建自己的功能包
+**严禁所有人都在同一个包里写代码！** 请使用以下命令创建属于你自己的功能包（注意修改 `你的名字` 和 `你的负责模块`）：
+```bash
+cd src
+# 示例：机载视觉模块上传
+ros2 pkg create --build-type ament_python vision_pkg --dependencies rclpy std_msgs geometry_msgs vision_msgs
+# 示例：路径规划模块上传
+ros2 pkg create --build-type ament_python planning_pkg --dependencies rclpy std_msgs geometry_msgs
+```
 
-# 3. 编译并测试
+### 第三步：编译工作空间
+每次修改完代码后，必须回到根目录（`ros2_ws`）进行编译：
+```bash
+cd ~/ros2_ws
 colcon build
 source install/setup.bash
+```
 
-# 4. 提交你的代码
+### 第四步：写代码与注册入口
+1. 进入你的包：`src/你的包名/你的包名/`。
+2. 新建你的 `.py` 代码文件。
+3. 打开同级的 `setup.py`，在 `entry_points` 的 `console_scripts` 里注册你的节点：
+```python
+    entry_points={
+        'console_scripts': [
+            'your_node_name = 你的包名.你的代码文件名:main',
+        ],
+    },
+```
+
+---
+
+## ☁️ Git 提交规范（怎么传代码）
+
+**写完代码后，建议及时把代码推送到云端！**
+
+```bash
+# 1. 确保你在 ros2_ws 根目录下
+cd ~/ros2_ws
+
+# 2. 拉取云端最新代码（防止队友改了代码导致冲突）
+git pull origin main
+
+# 3. 查看你改了哪些文件
+git status
+
+# 4. 添加修改（. 代表添加所有改动，.gitignore 会自动过滤垃圾文件）
 git add .
-git commit -m "feat: 完成了视觉模块的假数据发布测试"
+
+# 5. 提交并写清楚说明（不要写“update”这种废话）
+git commit -m "feat(视觉): 完成了YOLO目标检测并发布3D坐标"
+
+# 6. 推送到云端
 git push origin main
 ```
 
 ---
 
-## 4. 标准启动与测试流程
+## 🧪 联调测试常用命令
 
-在终端中依次启动各个模块（**请开 4 个不同的终端**）：
-
-### 终端 1：编译并启动中枢节点
+在终端运行任何 ROS 2 节点之前，**请务必确保执行了以下两行**：
 ```bash
-cd ~/你的工作空间路径
-colcon build
-source install/setup.bash
-export ROS_DOMAIN_ID=0
-ros2 run center_node_pkg center_node
+source /opt/ros/humble/setup.bash
+source ~/ros2_ws/install/setup.bash
+export ROS_DOMAIN_ID=0  # 保证大家都在同一个局域网
 ```
 
-### 终端 2：启动视觉模块 (张嘉芮)
+**发送假数据测试指令（供联调参考）：**
 ```bash
-source install/setup.bash
-export ROS_DOMAIN_ID=0
-# 替换为你实际的启动命令
-ros2 run vision_pkg vision_node
-```
-
-### 终端 3：启动路径规划模块
-```bash
-source install/setup.bash
-export ROS_DOMAIN_ID=0
-# 替换为你实际的启动命令
-ros2 run planning_pkg planning_node
-```
-
-### 终端 4：启动飞控底层桥接
-```bash
-source install/setup.bash
-export ROS_DOMAIN_ID=0
-# 替换为你实际的启动命令
-ros2 run fmu_bridge_pkg bridge_node
-```
-
----
-
-## 5. 内部测试专用假数据指令
-
-在真实模块开发完成前，可以使用以下指令发送假数据测试中枢节点的状态机：
-
-**注意**：执行前必须先执行 `source /opt/ros/humble/setup.bash` 和 `export ROS_DOMAIN_ID=0`。
-
-### 发送规划假数据（全局 ENU 坐标）
-```bash
+# 1. 发送路径规划模块假数据 (10, 20, 5)
 ros2 topic pub /planning/target_pose geometry_msgs/msg/PoseStamped "{header: {frame_id: 'world'}, pose: {position: {x: 10.0, y: 20.0, z: 5.0}}}"
-```
 
-### 发送视觉假数据（全局 ENU 坐标）
-```bash
+# 2. 发送机载视觉模块假数据 (3.5, 2.5, -5)
 ros2 topic pub /vision/target_pose geometry_msgs/msg/PoseStamped "{header: {frame_id: 'world'}, pose: {position: {x: 3.5, y: 2.5, z: -5.0}}}"
 ```
 
-*(建议在指令末尾加上 `-r 10`，让假数据以 10Hz 持续发送，防止中枢节点触发超时降级)*
-
 ---
 
-## 6. 开发者避坑警告（必看）
 
-### 坑 1：坐标系统一
-- **全系统内部（中枢、视觉、规划）统一使用 ENU 坐标系（东-北-天，Z轴向上为正）。**
-- **严禁在内部模块中写 NED 坐标系转换代码。** 所有的 ENU 到 NED 转换，统一由底层的飞控桥接模块（或 DDS 节点）负责处理。
-
-### 坑 2：深拷贝污染（Python 引用传递）
-在写 ROS 2 回调函数时，如果要把收到的 `msg` 存到类变量中，**必须使用 `copy.deepcopy(msg)`**。
-```python
-import copy
-
-def callback(self, msg):
-    # 错误做法：直接赋值，底层回收内存会导致数据乱码
-    # self.latest_data = msg 
-    
-    # 正确做法：深拷贝，物理隔离
-    self.latest_data = copy.deepcopy(msg) 
-```
-
-### 坑 3：网络隔离
-如果在不同电脑上联调（或者多终端），发现收不到数据，**请检查双方的 `ROS_DOMAIN_ID` 是否一致**（建议统一设置为 `export ROS_DOMAIN_ID=0`）。
-
----
-*如果有任何接口疑问或需要新增话题，请联系系统集成（赖纳）更新接口文档。*
+*Latest Update：2026-10-20 by EuroepanSkyFab*
