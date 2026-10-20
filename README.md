@@ -29,7 +29,7 @@ ros2_ws/
 
 ---
 
-## 🚀 成员上手指南（How to use）
+## 🚀 新队员上手指南（How to use）
 
 ### 第一步：克隆仓库
 打开你的 WSL Ubuntu 终端，进入你想存放代码的目录（比如 `~/`），执行：
@@ -116,5 +116,28 @@ ros2 topic pub /vision/target_pose geometry_msgs/msg/PoseStamped "{header: {fram
 
 ---
 
+## ！！避坑警告！！
+
+### 1：坐标系统一
+- **全系统内部（中枢、视觉、规划）统一使用 ENU 坐标系（东-北-天，Z轴向上为正）。**
+- **严禁在内部模块中写 NED 坐标系转换代码。** 所有的 ENU 到 NED 转换，统一由底层的飞控桥接模块（或 DDS 节点）负责处理。
+
+### 2：深拷贝污染（Python 引用传递）
+由于Python的特性，可变对象变量在赋值给其他变量的时候不会重新指定地址，而是直接把两个变量的指针挂在同一个地址。因此在写 ROS 2 回调函数时，如果要把收到的 `msg` 存到类变量中，**必须使用 `copy.deepcopy(msg)`**，以免后续变量底层回收内存时数据乱码。
+```python
+import copy
+
+def callback(self, msg):
+    # 错误做法：直接赋值，底层回收内存会导致数据乱码
+    # self.latest_data = msg 
+    
+    # 正确做法：深拷贝，物理隔离
+    self.latest_data = copy.deepcopy(msg) 
+```
+
+### 3：网络隔离
+如果在不同电脑上联调（或者多终端），发现收不到数据，**请检查双方的 `ROS_DOMAIN_ID` 是否一致**（建议统一设置为 `export ROS_DOMAIN_ID=0`）。
+
+---
 
 *Latest Update：2026-10-20 by EuroepanSkyFab*
