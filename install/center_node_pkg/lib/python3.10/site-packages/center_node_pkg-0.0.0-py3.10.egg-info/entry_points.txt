@@ -1,3 +1,0 @@
-[console_scripts]
-center_node = center_node_pkg.center_node:main
-
