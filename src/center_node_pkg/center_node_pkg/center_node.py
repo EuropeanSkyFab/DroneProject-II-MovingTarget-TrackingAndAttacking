@@ -36,10 +36,14 @@ class CenterNode(Node):
         
         
         self.current_mode = "GUIDANCE" # 状态机变量，默认听规划的
-        self.last_vision_time = 0.0 #计时变量
-        self.latest_plan_target = None
-        self.latest_vision_target = None
+        self.last_vision_time = 0.0 # 计时变量
+        self.latest_plan_target = None # 判断是否收到规划发出的
+        self.latest_vision_target = None # 判断是否收到视觉发出的
         
+        # 用于防止状态机高频切换状态
+        self.vision_hit_count = 0  # 连续看到目标的次数
+        self.vision_miss_count = 0 # 连续丢失目标的次数
+
         
         # 20Hz 定时器
         self.timer = self.create_timer(0.05, self.timer_callback)
@@ -48,28 +52,37 @@ class CenterNode(Node):
     # 路径规划的回调函数
     def plan_callback(self, msg):
         self.latest_plan_target = copy.deepcopy(msg)
-        self.get_logger().info(f"收到规划目标: x={msg.pose.position.x}, y={msg.pose.position.y}, z={msg.pose.position.z}")
+        self.get_logger().info(f"收到规划目标: x={msg.pose.position.x}, y={msg.pose.position.y}, z={msg.pose.position.z}", throttle_duration_sec=5.0)
         
     # 机载视觉的回调函数
     def vision_callback(self, msg):
-        # 因为现在 msg 直接就是 PoseStamped，里面包含 x,y,z
         self.latest_vision_target = copy.deepcopy(msg)
         self.last_vision_time = time.time() 
         
-        if self.current_mode != "VISION":
+        self.vision_hit_count += 1
+        self.vision_miss_count = 0 # 只要收到数据，丢失计数立刻清零
+        
+        # 【核心防抖】：必须连续收到 5 帧（约0.5秒），才真正切到 VISION
+        if self.current_mode != "VISION" and self.vision_hit_count >= 10:
             self.current_mode = "VISION"
-            self.get_logger().info("🚨 发现目标！切换到视觉跟踪模式！")
+            self.get_logger().info("🚨 连续锁定目标！切换到视觉跟踪模式！")
             
             
     # 状态机代码
     def timer_callback(self):
         
-        # 安全检查：如果在 VISION 模式下，超过 2 秒没收到视觉数据
+        # 安全检查：如果在 VISION 模式，检查心跳
         if self.current_mode == "VISION":
-            if time.time() - self.last_vision_time > 2.0:
-                self.current_mode = "GUIDANCE"
-                self.get_logger().warn("⚠️ 目标丢失超时！降级切回引导模式！")
-                self.latest_vision_target = None
+            if time.time() - self.last_vision_time > 2.0: # 超过2秒没收到新数据
+                self.vision_miss_count += 1
+                
+                # 【核心防抖】：必须连续判定丢失 20 次（定时器是20Hz，即1秒），才真正切回 GUIDANCE
+                if self.vision_miss_count >= 10:
+                    self.current_mode = "GUIDANCE"
+                    self.get_logger().warn("⚠️ 目标彻底丢失，降级切回引导模式！")
+                    self.latest_vision_target = None
+                    self.vision_miss_count = 0
+                    self.vision_hit_count = 0
 
         
         if self.current_mode == "GUIDANCE" and self.latest_plan_target is not None:
