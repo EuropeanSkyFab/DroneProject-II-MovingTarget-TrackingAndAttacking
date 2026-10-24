@@ -3,6 +3,9 @@ source /opt/ros/humble/setup.bash
 source ~/ros2_ws/install/setup.bash
 export ROS_DOMAIN_ID=0
 
+# 编译指令
+colcon build
+
 # 中枢节点启动命令
 cd ~/ros2_ws
 source install/setup.bash

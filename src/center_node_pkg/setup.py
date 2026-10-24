@@ -25,6 +25,9 @@ setup(
     entry_points={
         'console_scripts': [
             'center_node = center_node_pkg.center_node:main',
+            #'mock_mavsdk_bridge = center_node_pkg.mock_mavsdk_bridge:main',
         ],
     },
 )
+
+# 上面的mock_mavsdk_bridge是我自己测试时用的

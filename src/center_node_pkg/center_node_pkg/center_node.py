@@ -1,6 +1,7 @@
 import rclpy
 import time
 import copy
+import math
 from rclpy.node import Node
 from geometry_msgs.msg import PoseStamped
 # from px4_msgs.msg import TrajectorySetpoint # 暂时注释掉
@@ -33,16 +34,18 @@ class CenterNode(Node):
             10
             )
         
-        
-        
+        # 变量
         self.current_mode = "GUIDANCE" # 状态机变量，默认听规划的
         self.last_vision_time = 0.0 # 计时变量
         self.latest_plan_target = None # 判断是否收到规划发出的
         self.latest_vision_target = None # 判断是否收到视觉发出的
-        
         # 用于防止状态机高频切换状态
         self.vision_hit_count = 0  # 连续看到目标的次数
         self.vision_miss_count = 0 # 连续丢失目标的次数
+        #  物理安全边界配置（按需修改）
+        self.MAX_XY_DIST = 1000.0   # 水平最大允许坐标（米），超过则丢弃
+        self.MAX_ALT = 100.0        # 最大相对高度（米），比如上限 100 米
+        self.MIN_ALT = -50.0        # 最低相对高度（米，因为向下为负，比如限制最低到 -50 米）
 
         
         # 20Hz 定时器
@@ -51,11 +54,38 @@ class CenterNode(Node):
 
     # 路径规划的回调函数
     def plan_callback(self, msg):
+        x = msg.pose.position.x
+        y = msg.pose.position.y
+        z = msg.pose.position.z
+        
+        # 规划数据也可能发疯，同样拦截
+        if math.isnan(x) or math.isnan(y) or math.isnan(z) or math.isinf(x) or math.isinf(y) or math.isinf(z):
+            self.get_logger().warn("⚠️ 规划数据非法 (NaN 或 Inf)！已丢弃。",throttle_duration_sec=1.0 )
+            return
+        if abs(x) > self.MAX_XY_DIST or abs(y) > self.MAX_XY_DIST or z > self.MAX_ALT or z < self.MIN_ALT:
+            self.get_logger().warn(f"⚠️ 规划目标超出安全围栏！x={x}, y={y}, z={z}。已丢弃。",throttle_duration_sec=1.0 )
+            return
+
         self.latest_plan_target = copy.deepcopy(msg)
-        self.get_logger().info(f"收到规划目标: x={msg.pose.position.x}, y={msg.pose.position.y}, z={msg.pose.position.z}", throttle_duration_sec=5.0)
+        self.get_logger().info(f"收到规划目标: x={x}, y={y}, z={z}",throttle_duration_sec=1.0 )
         
     # 机载视觉的回调函数
     def vision_callback(self, msg):
+        x = msg.pose.position.x
+        y = msg.pose.position.y
+        z = msg.pose.position.z
+        
+        # 拦截 NaN 和 Inf
+        if math.isnan(x) or math.isnan(y) or math.isnan(z) or math.isinf(x) or math.isinf(y) or math.isinf(z):
+            self.get_logger().warn("⚠️ 拦截到非法数据 (NaN 或 Inf)！已丢弃。",throttle_duration_sec=1.0 )
+            return
+            
+        # 拦截超出物理边界的数据（引用在 __init__ 里定义的变量）
+        if abs(x) > self.MAX_XY_DIST or abs(y) > self.MAX_XY_DIST or z > self.MAX_ALT or z < self.MIN_ALT:
+            self.get_logger().warn(f"⚠️ 目标超出安全围栏！x={x}, y={y}, z={z}。已丢弃。",throttle_duration_sec=1.0 )
+            return
+
+        
         self.latest_vision_target = copy.deepcopy(msg)
         self.last_vision_time = time.time() 
         
