@@ -29,7 +29,7 @@ ros2_ws/
 
 ---
 
-## 🚀 上手指南（How to use）
+## 🚀 上手指南
 
 ### 第一步：克隆仓库
 打开你的 WSL Ubuntu 终端，进入你想存放代码的目录（比如 `~/`），执行：
@@ -64,9 +64,85 @@ source install/setup.bash
     entry_points={
         'console_scripts': [
             'your_node_name = 你的包名.你的代码文件名:main',
+            # 例如
+            # 'center_node = center_node_pkg.center_node:main',    （这是中枢节点的写法）
         ],
     },
 ```
+
+### 第五步：配置与使用 Launch 文件（一键启动）
+
+在复杂的机器人系统中，我们经常需要同时启动多个节点，或者给节点传入一堆参数。为了让我们的工程更规范、启动更便捷，**所有节点必须配置并在 launch 文件中启动**。
+
+（注：关于 `use_sim_time` 仿真时间对齐的问题，目前鉴于 WSL 环境的底层时钟兼容性 Bug，暂不强制开启。等未来上真机或原生 Ubuntu 环境时再启用，但 launch 框架必须现在搭好。）
+
+**1. 在 setup.py 中注册 launch 文件夹**
+（如果不注册，你的 launch 文件在 `colcon build` 编译时会被忽略）
+打开你包里的 `setup.py`，在 `data_files` 列表中添加你的 launch 文件夹路径：
+```python
+    data_files=[
+        ('share/ament_index/resource_index/packages',
+            ['resource/' + package_name]),
+        ('share/' + package_name, ['package.xml']),
+        # 加上下面这一行（注意把 your_node 替换成你自己的文件名）
+        ('share/' + package_name + '/launch', ['launch/your_node.launch.py']), 
+        #例如：
+        #('share/' + package_name + '/launch', ['launch/center_node.launch.py']),     （这是中枢节点的写法）
+    ],
+```
+
+**2. 编写你的 launch 文件**
+在你的包目录下新建 `launch/your_node.launch.py` 文件，填入以下模板：
+```python
+from launch import LaunchDescription
+from launch_ros.actions import Node
+
+def generate_launch_description():
+    return LaunchDescription([
+        Node(
+            package='你的包名',          # 比如 vision_pkg
+            executable='你的节点名',     # 比如 vision_node
+            name='你的节点名',
+            output='screen',
+            parameters=[
+                # 这里留作以后加参数用（比如强制使用gazebo底层时钟），但是现在先不要加！
+                # {'use_sim_time': True} 
+            ]
+        )
+    ])
+```
+
+**💡 铁律（特别注意！！！）**：
+编译完成后，以后启动你的节点，**严禁**再使用 `ros2 run`。必须统一使用以下命令启动，这样能保证所有人环境和参数的一致性：
+```bash
+ros2 launch 你的包名 your_node.launch.py
+# 例如：
+# ros2 launch center_node_pkg center_node.launch.py    （这是中枢节点的写法）
+```
+
+### 第六步：为所有发送的数据添加时间戳（！！！重要！！！）
+
+在分布式系统中，没有时间戳的数据就是“废数据”。为了防止控制系统追踪过期的目标，中枢节点内置了严格的延迟过滤机制。**如果你发送的消息时间戳为 0，或者延迟过高，你的数据将被中枢直接丢弃！**
+
+**1. 标准消息的时间戳赋值**
+所有带有 `header` 字段的标准消息（如 `geometry_msgs/msg/PoseStamped`、`nav_msgs/msg/Odometry` 等），在通过 `publish` 发送之前，**必须**填入当前的时间戳。
+
+在 Python 中，标准写法如下：
+```python
+msg = PoseStamped()
+# 核心：强制将当前系统时间（或仿真时间）写入消息头
+msg.header.stamp = self.get_clock().now().to_msg()
+msg.header.frame_id = "world" 
+# ... 其他坐标赋值 ...
+self.publisher.publish(msg)
+```
+
+**2. 给 AI 的提示**
+如果你使用 AI 辅助生成代码，请在提示词中明确要求：“在 ROS 2 的发布者节点中，必须在 publish 之前，使用 `self.get_clock().now().to_msg()` 为消息的 `header.stamp` 赋值”。
+
+**⚠️ 警告**：不发时间戳，**等于白写代码**！
+
+**💡 铁律**：以后你启动自己的节点，**严禁**直接使用 `ros2 run`，必须使用 `ros2 launch 你的包名 your_node.launch.py` 启动！否则时间戳不对，联调必定报错！
 
 ---
 
@@ -110,8 +186,8 @@ export ROS_DOMAIN_ID=0  # 保证大家都在同一个局域网
 # 1. 发送路径规划模块假数据 (10, 20, 5)
 ros2 topic pub /planning/target_pose geometry_msgs/msg/PoseStamped "{header: {frame_id: 'world'}, pose: {position: {x: 10.0, y: 20.0, z: 5.0}}}"
 
-# 2. 发送机载视觉模块假数据 (3.5, 2.5, -5)
-ros2 topic pub /vision/target_pose geometry_msgs/msg/PoseStamped "{header: {frame_id: 'world'}, pose: {position: {x: 3.5, y: 2.5, z: -5.0}}}"
+# 2. 发送机载视觉模块假数据 (3.5, 2.5, 5)
+ros2 topic pub /vision/target_pose geometry_msgs/msg/PoseStamped "{header: {frame_id: 'world'}, pose: {position: {x: 3.5, y: 2.5, z: 5.0}}}"
 ```
 
 ---
@@ -153,4 +229,4 @@ def callback(self, msg):
     3.  **安全验收**：联调时，务必进行“直接杀进程”的极限测试，验证飞控是否能在 0.5 秒内接管并安全降落。
 ---
 
-*Latest Update：2026-10-23 by EuroepanSkyFab*
+*Latest Update：2026-10-26 by EuroepanSkyFab*

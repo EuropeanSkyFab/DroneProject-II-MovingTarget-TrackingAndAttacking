@@ -10,6 +10,7 @@ setup(
         ('share/ament_index/resource_index/packages',
             ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
+        ('share/' + package_name + '/launch', ['launch/center_node.launch.py']), 
     ],
     install_requires=['setuptools'],
     zip_safe=True,
@@ -25,9 +26,14 @@ setup(
     entry_points={
         'console_scripts': [
             'center_node = center_node_pkg.center_node:main',
-            #'mock_mavsdk_bridge = center_node_pkg.mock_mavsdk_bridge:main',
+            
+            # 下面三个是发假数据用的测试节点
+            'mock_mavsdk_bridge = center_node_pkg.mock_mavsdk_bridge:main',    # 假桥接节点（需要自己装gazebo才能用）
+            'mock_plan_node = center_node_pkg.mock_plan_node:main',    # 假规划节点
+            'mock_vision_node = center_node_pkg.mock_vision_node:main',    # 假视觉节点
         ],
     },
 )
 
-# 上面的mock_mavsdk_bridge是我自己测试时用的
+
+

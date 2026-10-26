@@ -6,21 +6,30 @@ export ROS_DOMAIN_ID=0
 # 编译指令
 colcon build
 
-# 中枢节点启动命令
-cd ~/ros2_ws
-source install/setup.bash
-export ROS_DOMAIN_ID=0
-ros2 run center_node_pkg center_node
-
+# 以下按顺序启动：
 # 假桥接节点启动命令
 cd ~/ros2_ws
+colcon build
 source install/setup.bash
 export ROS_DOMAIN_ID=0
-ros2 run center_node_pkg mavsdk_bridge
+ros2 run center_node_pkg mock_mavsdk_bridge
 
-# 发送规划假数据 (10, 20, 5)
-ros2 topic pub /planning/target_pose geometry_msgs/msg/PoseStamped "{header: {frame_id: 'world'}, pose: {position: {x: 10.0, y: 20.0, z: 5.0}}}"
+# 中枢节点启动命令
+cd ~/ros2_ws
+colcon build
+source install/setup.bash
+export ROS_DOMAIN_ID=0
+ros2 launch center_node_pkg center_node.launch.py
 
-# 发送视觉假数据 (3.5, 2.5, 5)
-ros2 topic pub /vision/target_pose geometry_msgs/msg/PoseStamped "{header: {frame_id: 'world'}, pose: {position: {x: 3.5, y: 2.5, z: 5.0}}}"
+# 假规划节点启动命令
+cd ~/ros2_ws
+source /opt/ros/humble/setup.bash
+export ROS_DOMAIN_ID=0
+ros2 run center_node_pkg mock_plan_node
+
+# 假视觉节点启动命令
+cd ~/ros2_ws  
+source /opt/ros/humble/setup.bash
+export ROS_DOMAIN_ID=0
+ros2 run center_node_pkg mock_vision_node
 
