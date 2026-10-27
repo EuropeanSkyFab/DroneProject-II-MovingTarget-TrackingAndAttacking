@@ -24,12 +24,14 @@ ros2 launch center_node_pkg center_node.launch.py
 # 假规划节点启动命令
 cd ~/ros2_ws
 source /opt/ros/humble/setup.bash
+source install/setup.bash
 export ROS_DOMAIN_ID=0
 ros2 run center_node_pkg mock_plan_node
 
 # 假视觉节点启动命令
 cd ~/ros2_ws  
 source /opt/ros/humble/setup.bash
+source install/setup.bash
 export ROS_DOMAIN_ID=0
 ros2 run center_node_pkg mock_vision_node
 
