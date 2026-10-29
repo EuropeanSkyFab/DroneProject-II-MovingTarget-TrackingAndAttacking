@@ -2,26 +2,25 @@ import rclpy
 import time
 import copy
 import math
+import json
 from rclpy.node import Node
 from geometry_msgs.msg import PoseStamped
 from geometry_msgs.msg import Vector3   # 云台
 from nav_msgs.msg import Odometry # 订阅己方无人机位置
 from std_msgs.msg import Empty # 心跳发布
+from std_msgs.msg import String
 # from px4_msgs.msg import TrajectorySetpoint  （暂时注释掉）
 
 class CenterNode(Node):
     def __init__(self):
         super().__init__('center_node')
         
-        # 存放多机集群的字典
-        self.swarm_config = {
-            'drone_1': {'offset_x': 0.0, 'offset_y': 0.0, 'offset_z': 0.0}, # 'offset'指集群阵型中，该无人机相对目标中心点的空间偏移量
-            # 以后要加飞机，直接在这里加 'drone_2': {...}
-        }
+        # 存放多机集群的列表
+        self.swarm_config = ["drone_1"]
         
         # 1. 订阅规划目标（ENU）
         self.plan_sub = self.create_subscription(
-            PoseStamped, 
+            String, 
             '/planning/target_pose', 
             self.plan_callback, 
             10
@@ -35,7 +34,15 @@ class CenterNode(Node):
             10
             )
         
-        # 3. 订阅己方无人机状态
+        # 3. 订阅课题三的战术指令
+        self.strategy_sub = self.create_subscription(
+            String, 
+            '/strategy/cmd',
+            self.strategy_callback,
+            10
+            )
+        
+        # 4. 订阅己方无人机状态
         for drone_id in self.swarm_config.keys():
             topic_name = f'/{drone_id}/state'
             self.create_subscription(
@@ -46,7 +53,7 @@ class CenterNode(Node):
             )
             
             
-        # 4. 发布给飞控（升级为集群命名空间）
+        # 5. 发布给飞控（升级为集群命名空间）
         self.fmu_pubs = {}
         for drone_id in self.swarm_config.keys():
             topic_name = f'/{drone_id}/fmu/in/trajectory_setpoint'
@@ -56,7 +63,7 @@ class CenterNode(Node):
                 10
                 )
             
-        # 5. 发布给云台（已配置集群命名空间）
+        # 6. 发布给云台（已配置集群命名空间）
         self.gimbal_pubs = {}
         for drone_id in self.swarm_config.keys():
             gimbal_topic = f'/{drone_id}/fmu/in/gimbal_setpoint'
@@ -65,6 +72,16 @@ class CenterNode(Node):
                 gimbal_topic,
                 10
             )
+            
+        # 7.发布动作标签给桥接（用于解除限幅）
+        self.action_pubs = {}
+        for drone_id in self.swarm_config.keys():
+            self.action_pubs[drone_id] = self.create_publisher(
+                String, 
+                f'/{drone_id}/action',
+                10
+                )
+
         # --------------------------- 变量 --------------------------------
         
         # 基础变量
@@ -88,8 +105,9 @@ class CenterNode(Node):
         self.MIN_ALT = -50.0        # 最低相对高度（米，因为向下为负，比如限制最低到 -50 米）
         
         # 延迟阈值（秒），用于检测数据的时效与可信度（按需修改）
-        self.max_vision_delay = 0.2 # 视觉模块数据的时效
-        self.max_plan_delay = 0.5 # 规划模块数据的时效
+        self.max_vision_delay = 0.2     # 视觉模块数据的时效
+        self.max_plan_delay = 0.5       # 规划模块数据的时效
+        
         # 检测内存的老数据，以便后续清出
         self.last_plan_time = 0.0 # 记录最后一次收到规划数据的时间
         # ----------------------------------------------------------------
@@ -103,94 +121,99 @@ class CenterNode(Node):
 
     # -----------------------------------辅助函数------------------------------------
     # 根据基础目标点，分发带有阵型偏移的指令给所有无人机（用于下面关于视觉与规划的回调函数）
-    def publish_swarm_target(self, base_msg):
-        if base_msg is None:
+    def send_single_target(self, target_msg):
+        if target_msg is None:
             return
-
-        base_x = base_msg.pose.position.x
-        base_y = base_msg.pose.position.y
-        base_z = base_msg.pose.position.z
-
-        for drone_id, config in self.swarm_config.items():
-            out_msg = copy.deepcopy(base_msg)
-            out_msg.header.frame_id = "world"
             
-            # 加上物理偏移量
-            out_msg.pose.position.x = base_x + config['offset_x']
-            out_msg.pose.position.y = base_y + config['offset_y']
-            out_msg.pose.position.z = base_z + config['offset_z']
+        # 直接拿中控当前指定的飞机 ID
+        drone_id = self.active_drone_id
+        
+        # 安全检查：确保这个 ID 在我们的列表里
+        if drone_id not in self.fmu_pubs:
+            return
             
-            # 从字典取出对应飞机的发布者并发送
-            self.fmu_pubs[drone_id].publish(out_msg)
-            self.get_logger().info("🔥🔥🔥 数据已发出！", throttle_duration_sec=1.0)
+        out_msg = copy.deepcopy(target_msg)
+        out_msg.header.frame_id = "world"
+        
+        # 去掉所有偏移量计算，指哪打哪
+        self.fmu_pubs[drone_id].publish(out_msg)
+        self.get_logger().info(f"🔥🔥🔥 {drone_id} 数据已发出！", throttle_duration_sec=1.0)
 
     # 计算云台角度以控制云台转动
     def publish_gimbal_target(self, target_msg):
         if target_msg is None:
             return
             
+        drone_id = self.active_drone_id
+        if drone_id not in self.swarm_drones:
+            return
+            
+        my_state = self.drone_states.get(drone_id)
+        if my_state is None:
+            return # 如果还没收到这架飞机的位置，直接跳过
+            
+        # 获取目标和自己的坐标
         target_x = target_msg.pose.position.x
         target_y = target_msg.pose.position.y
+        drone_x = my_state.pose.pose.position.x
+        drone_y = my_state.pose.pose.position.y
         
+        # 算相对偏移和云台偏航角
+        delta_x = target_x - drone_x
+        delta_y = target_y - drone_y
+        target_yaw_rad = math.atan2(delta_x, delta_y) 
         
-        # 遍历集群中的每一架飞机
-        for drone_id in self.swarm_config.keys():
-            # 获取该飞机的真实位置
-            my_state = self.drone_states.get(drone_id)
-            if my_state is None:
-                continue # 如果还没收到这架飞机的位置，先跳过它
-                
-            drone_x = my_state.pose.pose.position.x
-            drone_y = my_state.pose.pose.position.y
-            
-            # 算这架飞机到目标的相对偏移
-            delta_x = target_x - drone_x
-            delta_y = target_y - drone_y
-            
-            # 算云台偏航角
-            target_yaw_rad = math.atan2(delta_x, delta_y) 
-            
-            # 组装指令
-            gimbal_cmd = Vector3()
-            gimbal_cmd.x = -0.2 # Pitch (俯仰)
-            gimbal_cmd.y = target_yaw_rad # Yaw (偏航)
-            gimbal_cmd.z = 0.0
-            
-            # 精准投递给对应的飞机
-            self.gimbal_pubs[drone_id].publish(gimbal_cmd)
+        # 组装指令并精准投递
+        gimbal_cmd = Vector3()
+        gimbal_cmd.x = -0.2 # Pitch (俯仰)
+        gimbal_cmd.y = target_yaw_rad # Yaw (偏航)
+        gimbal_cmd.z = 0.0
+        
+        self.gimbal_pubs[drone_id].publish(gimbal_cmd)
             
     # 
     def drone_state_callback(self, msg, drone_id):
         self.drone_states[drone_id] = copy.deepcopy(msg)
-    # -------------------------------- 对应模块的回调函数 -----------------------------------
+
 
     # 路径规划的回调函数
     def plan_callback(self, msg):
-        
-         # 时间延迟过滤检测 
-        current_time = self.get_clock().now()
-        msg_time = rclpy.time.Time.from_msg(msg.header.stamp)
-        delay = (current_time - msg_time).nanoseconds / 1e9
-        if delay > self.max_plan_delay:
-            self.get_logger().warn(f"⚠️ [规划] 数据延迟过高 ({delay:.3f}s)，已丢弃！", throttle_duration_sec=1.0)
-            return
-        
-        # 物理边界检查
-        x = msg.pose.position.x
-        y = msg.pose.position.y
-        z = msg.pose.position.z
-        
-        # 规划数据也可能发疯，同样拦截
-        if math.isnan(x) or math.isnan(y) or math.isnan(z) or math.isinf(x) or math.isinf(y) or math.isinf(z):
-            self.get_logger().warn("⚠️ 规划数据非法 (NaN 或 Inf)！已丢弃。",throttle_duration_sec=1.0 )
-            return
-        if abs(x) > self.MAX_XY_DIST or abs(y) > self.MAX_XY_DIST or z > self.MAX_ALT or z < self.MIN_ALT:
-            self.get_logger().warn(f"⚠️ 规划目标超出安全围栏！x={x}, y={y}, z={z}。已丢弃。",throttle_duration_sec=1.0 )
-            return
+        try:
+            data = json.loads(msg.data)
+            msg_time = data.get("stamp", 0.0)
+            current_time = self.get_clock().now().nanoseconds / 1e9
+            
+            # 时间延迟过滤
+            if current_time - msg_time > self.max_plan_delay:
+                self.get_logger().warn("⚠️ [规划] 数据延迟过高，已丢弃！", throttle_duration_sec=1.0)
+                return
+                
+            x = float(data.get("x", 0.0))
+            y = float(data.get("y", 0.0))
+            z = float(data.get("z", 0.0))
+            
+            # 物理边界过滤
+            if math.isnan(x) or math.isnan(y) or math.isnan(z) or math.isinf(x) or math.isinf(y) or math.isinf(z):
+                self.get_logger().warn("⚠️ 规划数据非法 (NaN 或 Inf)！已丢弃。", throttle_duration_sec=1.0)
+                return
+            if abs(x) > self.MAX_XY_DIST or abs(y) > self.MAX_XY_DIST or z > self.MAX_ALT or z < self.MIN_ALT:
+                self.get_logger().warn(f"⚠️ 规划目标超出安全围栏！已丢弃。", throttle_duration_sec=1.0)
+                return
 
-        self.latest_plan_target = copy.deepcopy(msg)
-        self.last_plan_time = time.time() # 记录最新时间
-        self.get_logger().info(f"收到规划目标(!): x={x}, y={y}, z={z}",throttle_duration_sec=1.0 )
+            # 重新打包成 PoseStamped 存起来
+            target = PoseStamped()
+            target.header.stamp = self.get_clock().now().to_msg()
+            target.header.frame_id = "world"
+            target.pose.position.x = x
+            target.pose.position.y = y
+            target.pose.position.z = z
+            
+            self.latest_plan_target = target
+            self.last_plan_time = time.time()
+            self.get_logger().info(f"收到规划 JSON: x={x}, y={y}, z={z}", throttle_duration_sec=1.0)
+            
+        except Exception as e:
+            self.get_logger().error(f"解析规划 JSON 失败: {e}")
         
         
         

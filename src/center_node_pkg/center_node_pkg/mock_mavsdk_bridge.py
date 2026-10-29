@@ -24,6 +24,8 @@ class MavsdkBridge(Node):
         
         self.latest_target = None
         self.last_target_time = 0.0 # 记录最后一次收到中枢坐标的时间
+        self.is_landing = False  # 防止重复发送降落指令的锁
+        
         self.drone = System(port=50052) 
         self.get_logger().info("MAVSDK 桥接节点已启动，准备连接 PX4...")
         
@@ -101,13 +103,22 @@ class MavsdkBridge(Node):
 
         # 核心控制循环（20Hz）
         while rclpy.ok():
+            
             # 【第一部分】：检测中枢心跳
-
             if self.last_heartbeat_time > 0.0 and (time.time() - self.last_heartbeat_time > 1.0):
-                self.get_logger().error("💀 中枢彻底失联！桥接停止发送指令，触发 PX4 降落！", throttle_duration_sec=1.0)
-                self.latest_target = None 
+                
+                # 如果还没触发过降落，就主动下发降落指令
+                if not self.is_landing:
+                    self.get_logger().error("💀 中枢彻底失联！桥接主动触发 PX4 降落！", throttle_duration_sec=1.0)
+                    self.latest_target = None 
+                    self.is_landing = True # 上锁，防止重复调用
+                    
+                    # 【核心修改】：主动让 MAVSDK 接管并执行降落
+                    await self.drone.action.land()
+                
+                # 降落过程中，循环直接跳过
                 await asyncio.sleep(0.05)
-                continue  # 中枢死了，直接跳过本次循环（PX4收不到指令，会自动降落）
+                continue 
 
 
             # 【第二部分】：向中枢回传己方飞机的真实位置
