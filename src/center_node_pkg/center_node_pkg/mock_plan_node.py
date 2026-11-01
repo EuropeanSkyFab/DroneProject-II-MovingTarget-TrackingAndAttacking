@@ -1,47 +1,43 @@
 import rclpy
+import json
+import math
+import time
 from rclpy.node import Node
-from geometry_msgs.msg import PoseStamped
+from std_msgs.msg import String
 
-class FakePlanningPublisher(Node):
+class MockPlanNode(Node):
     def __init__(self):
-        super().__init__('fake_planning_pub')
-        # 创建发布者，话题名必须对应中枢订阅的规划话题
-        self.publisher_ = self.create_publisher(PoseStamped, '/planning/target_pose', 10)
-        
-        # 设置 10Hz 的频率发送
-        self.timer = self.create_timer(0.1, self.timer_callback)
-        
-        # 你可以在这里修改你想要的假目标坐标
-        self.target_x = 10.0
-        self.target_y = 20.0
-        self.target_z = 5.0
-
-        self.get_logger().info('假规划数据发布器已启动！')
+        super().__init__('mock_plan_node')
+        # 发布 String 类型的 JSON 数据
+        self.publisher_ = self.create_publisher(String, '/planning/target_pose', 10)
+        self.timer = self.create_timer(0.1, self.timer_callback) # 10Hz
+        self.t = 0.0
+        self.get_logger().info('假规划节点已启动，准备发送 JSON 坐标...')
 
     def timer_callback(self):
-        msg = PoseStamped()
+        self.t += 0.1
+        # 模拟目标在 15 米高度，半径 10 米的圆上移动
+        x = 10.0 * math.cos(self.t * 0.5) 
+        y = 10.0 * math.sin(self.t * 0.5)
+        z = 15.0 
         
-        # 【关键】：获取当前仿真时间并填入 header
-        msg.header.stamp = self.get_clock().now().to_msg()
-        msg.header.frame_id = "world"
+        data = {
+            "stamp": time.time(), # 极其重要：带时间戳防止被中枢拦截
+            "x": x,
+            "y": y,
+            "z": z
+        }
         
-        # 填入坐标
-        msg.pose.position.x = self.target_x
-        msg.pose.position.y = self.target_y
-        msg.pose.position.z = self.target_z
-        
-        # 姿态（四元数默认单位四元数即可）
-        msg.pose.orientation.w = 1.0
-        
-        # 发布
+        msg = String()
+        msg.data = json.dumps(data)
         self.publisher_.publish(msg)
         
-        # 打印日志，方便你看它有没有在发
-        self.get_logger().info(f'发送规划目标 -> x:{msg.pose.position.x}, y:{msg.pose.position.y}, z:{msg.pose.position.z}', throttle_duration_sec=1.0)
+        # 降低打印频率，防刷屏
+        self.get_logger().info(f'发送假规划: x={x:.2f}, y={y:.2f}, z={z}', throttle_duration_sec=1.0)
 
 def main(args=None):
     rclpy.init(args=args)
-    node = FakePlanningPublisher()
+    node = MockPlanNode()
     rclpy.spin(node)
     node.destroy_node()
     rclpy.shutdown()
