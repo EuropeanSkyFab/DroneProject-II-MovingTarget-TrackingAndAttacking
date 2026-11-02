@@ -18,15 +18,19 @@
 ros2_ws/
 ├── .gitignore              # Git 忽略规则（已配置好 ROS 2 规则）
 ├── README.md               # 本说明文档
+├── 文档                    # 其他细节文档
+|   ├── 进度报告.md
+|   ├── 课题二-课题三-接口规范.md
+|   ├── 课题二内部接口规范.md
+|   └── 内部分工细节.md
 ├── mock_nodes/             # 假节点，用于测试自己的数据
-|   ├── launch_control_dry_version.py
-|   ├── launch_control_perfect_version.py
+|   ├── launch_control_dry_version.py       # 测试数据用的GUI界面程序，直接运行这个
 |   ├── mock_mavsdk_bridge_dry.py
 |   ├── mock_mavsdk_bridge.py
 |   ├── mock_plan_node.py
 |   └── mock_vision_node.py
 └── src/                    # 所有源码放这里
-    └── center_node_pkg/    # 【系统集成】中枢节点包（赖纳负责）
+    └── center_node_pkg/    # 【系统集成】中枢节点包
         ├── center_node_pkg/
         │   ├── __init__.py
         │   └── center_node.py  # 中枢主控逻辑
