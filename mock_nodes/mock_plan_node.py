@@ -1,46 +1,43 @@
 import rclpy
 import json
-import math
-import time
 from rclpy.node import Node
 from std_msgs.msg import String
 
 class MockPlanNode(Node):
     def __init__(self):
         super().__init__('mock_plan_node')
-        # 发布 String 类型的 JSON 数据
-        self.publisher_ = self.create_publisher(String, '/planning/target_pose', 10)
-        self.timer = self.create_timer(0.1, self.timer_callback) # 10Hz
-        self.t = 0.0
-        self.get_logger().info('假规划节点已启动，准备发送 JSON 坐标...')
+        
+        # 接收来自 GUI 的内部注入数据
+        self.sub = self.create_subscription(
+            String, '~/planning_inject', self.inject_callback, 10)
+            
+        # 发布到正式的对外话题
+        self.pub = self.create_publisher(String, '/planning/target_pose', 10)
+        self.get_logger().info('假规划已就绪，等待 GUI 注入数据...')
 
-    def timer_callback(self):
-        self.t += 0.1
-        # 模拟目标在 15 米高度，半径 10 米的圆上移动
-        x = 10.0 * math.cos(self.t * 0.5) 
-        y = 10.0 * math.sin(self.t * 0.5)
-        z = 15.0 
-        
-        data = {
-            "stamp": time.time(), # 极其重要：带时间戳防止被中枢拦截
-            "x": x,
-            "y": y,
-            "z": z
-        }
-        
-        msg = String()
-        msg.data = json.dumps(data)
-        self.publisher_.publish(msg)
-        
-        # 降低打印频率，防刷屏
-        self.get_logger().info(f'发送假规划: x={x:.2f}, y={y:.2f}, z={z}', throttle_duration_sec=1.0)
+    def inject_callback(self, msg):
+        # 尝试解析 JSON，并强制刷新 stamp
+        try:
+            data = json.loads(msg.data)
+            data["stamp"] = self.get_clock().now().nanoseconds / 1e9 # 重新打时间戳
+            
+            out_msg = String()
+            out_msg.data = json.dumps(data)
+            self.pub.publish(out_msg)
+            self.get_logger().info(f'🧠 转发规划坐标: ({data.get("x")}, {data.get("y")}, {data.get("z")})')
+        except Exception as e:
+            self.get_logger().error(f'解析错误: {e}')
 
 def main(args=None):
     rclpy.init(args=args)
     node = MockPlanNode()
-    rclpy.spin(node)
-    node.destroy_node()
-    rclpy.shutdown()
+    try:
+        rclpy.spin(node)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        node.destroy_node()
+        rclpy.shutdown()
 
 if __name__ == '__main__':
     main()

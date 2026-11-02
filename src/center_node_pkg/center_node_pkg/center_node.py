@@ -11,7 +11,7 @@ from std_msgs.msg import Empty # 心跳发布
 from std_msgs.msg import String
 from sensor_msgs.msg import BatteryState
 from diagnostic_msgs.msg import DiagnosticStatus, KeyValue
-# from px4_msgs.msg import TrajectorySetpoint  （暂时注释掉）
+
 
 
 class CenterNode(Node):
