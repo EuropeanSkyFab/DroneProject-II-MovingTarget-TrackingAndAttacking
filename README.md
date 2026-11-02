@@ -18,6 +18,13 @@
 ros2_ws/
 ├── .gitignore              # Git 忽略规则（已配置好 ROS 2 规则）
 ├── README.md               # 本说明文档
+├── mock_nodes/             # 假节点，用于测试自己的数据
+|   ├── launch_control_dry_version.py
+|   ├── launch_control_perfect_version.py
+|   ├── mock_mavsdk_bridge_dry.py
+|   ├── mock_mavsdk_bridge.py
+|   ├── mock_plan_node.py
+|   └── mock_vision_node.py
 └── src/                    # 所有源码放这里
     └── center_node_pkg/    # 【系统集成】中枢节点包（赖纳负责）
         ├── center_node_pkg/
@@ -45,7 +52,7 @@ cd src
 # 示例：机载视觉模块上传
 ros2 pkg create --build-type ament_python vision_pkg --dependencies rclpy std_msgs geometry_msgs vision_msgs
 # 示例：路径规划模块上传
-ros2 pkg create --build-type ament_python planning_pkg --dependencies rclpy std_msgs geometry_msgs
+ros2 pkg create --build-type ament_python planning_pkg --dependencies rclpy std_msgs geometry_msgs nav_msgs
 ```
 
 ### 第三步：编译工作空间
@@ -172,24 +179,44 @@ git push origin main
 
 ---
 
-## 🧪 联调测试常用命令
+## 🧪 联调测试
 
-在终端运行任何 ROS 2 节点之前，**请务必确保执行了以下两行**：
+在终端运行任何 ROS 2 节点之前，**请务必确保执行了以下三行**：
 ```bash
 source /opt/ros/humble/setup.bash
 source ~/ros2_ws/install/setup.bash
 export ROS_DOMAIN_ID=0  # 保证大家都在同一个局域网
 ```
 
-**发送假数据测试指令（供联调参考）：**
-```bash
-# 1. 发送路径规划模块假数据 (10, 20, 5)
-ros2 topic pub /planning/target_pose geometry_msgs/msg/PoseStamped "{header: {frame_id: 'world'}, pose: {position: {x: 10.0, y: 20.0, z: 5.0}}}"
+### 🎮 统一测试控制台使用指南
 
-# 2. 发送机载视觉模块假数据 (3.5, 2.5, 5)
-ros2 topic pub /vision/target_pose geometry_msgs/msg/PoseStamped "{header: {frame_id: 'world'}, pose: {position: {x: 3.5, y: 2.5, z: 5.0}}}"
+为了降低大家的联调成本，系统集成模块提供了**统一的 GUI 测试台（`launch_control`）**。这个控制台集成了：一键启停假节点、假中控战术指令下发、以及各节点的实时日志显示。
+
+由于大家的环境配置不同，测试台分为两个版本，**请根据自己电脑是否安装了 PX4 + Gazebo 选择对应的启动方式**：
+
+#### 1. 纯逻辑联调版（不需要 PX4 / Gazebo）
+**适用人群**：机载视觉模块、路径规划模块的开发者。
+**说明**：该版本使用 `mock_mavsdk_bridge_dry.py`，仅进行纯数据流的收发测试，不会连接任何飞控。
+
+启动命令：
+```bash
+python3 src/mock_nodes/launch_control_dry_version.py
 ```
 
+#### 2. 全链路仿真版（需要 PX4 / Gazebo）
+**适用人群**：系统集成、飞控底层桥接开发者（需开启 PX4 SITL）。
+**说明**：该版本使用真实的 `mock_mavsdk_bridge.py`，将指令通过 MAVSDK 转为真实物理动作。
+
+启动命令：
+```bash
+python3 src/mock_nodes/launch_control.py
+```
+
+---
+**💡 使用提示**：
+1. 打开控制台后，先点击右侧的“开启”按钮拉起对应的假节点。
+2. 确认日志正常滚动后，可在左侧中控面板下发 `TAKEOFF`、`TRACK` 等战术指令。
+3. 点击右上角关闭窗口时，所有拉起的子进程会自动安全退出，无需手动 `kill`。
 ---
 
 ## ！！避坑警告！！
@@ -229,4 +256,4 @@ def callback(self, msg):
     3.  **安全验收**：联调时，务必进行“直接杀进程”的极限测试，验证飞控是否能在 0.5 秒内接管并安全降落。
 ---
 
-*Latest Update：2026-10-26 by EuroepanSkyFab*
+*Latest Update：2026-11-2 by EuroepanSkyFab*
