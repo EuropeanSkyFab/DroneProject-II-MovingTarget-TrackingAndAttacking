@@ -13,20 +13,23 @@ class MockPlanNode(Node):
             
         # 发布到正式的对外话题
         self.pub = self.create_publisher(String, '/planning/target_pose', 10)
+        self.timer = self.create_timer(0.1, self.timer_callback)
         self.get_logger().info('假规划已就绪，等待 GUI 注入数据...')
 
     def inject_callback(self, msg):
-        # 尝试解析 JSON，并强制刷新 stamp
+        # 收到 GUI 发来的指令时，保存下来，并打上最新时间戳
         try:
-            data = json.loads(msg.data)
-            data["stamp"] = self.get_clock().now().nanoseconds / 1e9 # 重新打时间戳
-            
-            out_msg = String()
-            out_msg.data = json.dumps(data)
-            self.pub.publish(out_msg)
-            self.get_logger().info(f'🧠 转发规划坐标: ({data.get("x")}, {data.get("y")}, {data.get("z")})')
+            self.data = json.loads(msg.data)
+            self.get_logger().info(f'收到新注入规划点...')
         except Exception as e:
             self.get_logger().error(f'解析错误: {e}')
+            
+    def timer_callback(self):
+        if hasattr(self, 'data') and self.data is not None:
+            self.data["stamp"] = self.get_clock().now().nanoseconds / 1e9
+            out_msg = String()
+            out_msg.data = json.dumps(self.data)
+            self.pub.publish(out_msg)
 
 def main(args=None):
     rclpy.init(args=args)

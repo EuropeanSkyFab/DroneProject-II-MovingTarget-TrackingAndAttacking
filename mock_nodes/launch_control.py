@@ -56,6 +56,8 @@ class MockTopic3(Node):
         x = msg.pose.pose.position.x
         y = msg.pose.pose.position.y
         z = msg.pose.pose.position.z
+        # 从消息的 child_frame_id 里提取 drone_id，或者直接在回调里区分
+        drone_id = msg.child_frame_id.split('_base_link')[0] if msg.child_frame_id else "unknown"
         self.gui_queue.put(("state_update", f"X: {x:8.2f} m | Y: {y:8.2f} m | Z: {z:8.2f} m"))
 
 # ==================== 主 GUI 界面 ====================
@@ -78,7 +80,7 @@ class GroundStationGUI:
             {"name": "桥接", "default": "mock_mavsdk_bridge.py"},
             {"name": "规划", "default": "mock_plan_node.py"},
             {"name": "视觉", "default": "mock_vision_node.py"},
-            {"name": "中枢", "default": "center_node.py"}  # ★ 新增
+            {"name": "中枢", "default": "/home/europeanskyfab/ros2_ws/src/center_node_pkg/center_node_pkg/center_node.py"} 
         ]
         
         self.font_title = ("WenQuanYi Micro Hei", 14, "bold")
