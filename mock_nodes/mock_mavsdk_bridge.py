@@ -13,18 +13,31 @@ from mavsdk.offboard import OffboardError, PositionNedYaw
 
 class MavsdkBridge(Node):
     def __init__(self):
-        # ★ 节点名字设为通用，避免冲突
         super().__init__('mavsdk_bridge')
 
         # ================= 动态参数配置 =================
         self.declare_parameter('drone_id', 'drone_1')
-        self.declare_parameter('port', 50052)
+        self.declare_parameter('port', 50052)       # MAVSDK 本地监听端口
+        self.declare_parameter('mav_port', 14540)   # PX4 UDP 端口
         
         self.drone_id = self.get_parameter('drone_id').value
         self.port = self.get_parameter('port').value
+        self.mav_port = self.get_parameter('mav_port').value
         # ===============================================
 
-        # 订阅中枢指令（★ 动态拼接话题）
+        # ================= 世界坐标系偏移配置 =================
+        # 这里的偏移量必须与你在 Gazebo 里启动时的 PX4_GZ_MODEL_POSE 保持一致
+        self.offset_x = 0.0
+        self.offset_y = 0.0
+        if self.drone_id == "drone_1":
+            self.offset_x, self.offset_y = 0.0, 0.0
+        elif self.drone_id == "drone_2":
+            self.offset_x, self.offset_y = 0.0, 2.0   # 对应 PX4_GZ_MODEL_POSE="0,2"
+        elif self.drone_id == "drone_3":
+            self.offset_x, self.offset_y = 0.0, 4.0   # 对应 PX4_GZ_MODEL_POSE="0,4"
+        # =======================================================
+
+        # 订阅中枢指令（动态拼接话题）
         self.create_subscription(PoseStamped, f'/{self.drone_id}/fmu/in/trajectory_setpoint', self.pose_callback, 10)
         self.create_subscription(String, f'/{self.drone_id}/action', self.action_callback, 10)
         self.create_subscription(Empty, f'/{self.drone_id}/heartbeat', self.heartbeat_callback, 10)
@@ -40,10 +53,12 @@ class MavsdkBridge(Node):
         self.is_airborne = False
         self.is_landing = False
 
+        # 影子位置（NED）
         self.current_n = 0.0
         self.current_e = 0.0
         self.current_d = 0.0
 
+        # 真实位置（NED）
         self.real_n = 0.0
         self.real_e = 0.0
         self.real_d = 0.0
@@ -52,9 +67,9 @@ class MavsdkBridge(Node):
         self.TARGET_FRESH_TIMEOUT = 2.0
         self.LAND_D_THRESHOLD = -0.2
 
-        # ★ 动态连接端口
+        # 动态连接端口
         self.drone = System(port=self.port)
-        self.get_logger().info(f"[{self.drone_id}] MAVSDK 桥接已启动，监听端口 {self.port}...")
+        self.get_logger().info(f"[{self.drone_id}] MAVSDK 桥接已启动，监听端口 {self.port}，连接 PX4 端口 {self.mav_port}...")
 
         self.mavsdk_thread = threading.Thread(target=self.run_mavsdk_loop, daemon=True)
         self.mavsdk_thread.start()
@@ -78,17 +93,29 @@ class MavsdkBridge(Node):
             odom = Odometry()
             odom.header.stamp = self.get_clock().now().to_msg()
             odom.header.frame_id = "world"
-            odom.child_frame_id = f"{self.drone_id}_base_link" # ★ 动态 frame_id
-            odom.pose.pose.position.x = pos.position.east_m
-            odom.pose.pose.position.y = pos.position.north_m
-            odom.pose.pose.position.z = -pos.position.down_m
+            odom.child_frame_id = f"{self.drone_id}_base_link"
+            
+            # 1. PX4 原本反馈的局部坐标（以起飞点为原点）
+            local_x = pos.position.east_m
+            local_y = pos.position.north_m
+            local_z = -pos.position.down_m
+            
+            # 2. 转换为全局世界坐标（加上物理偏移）
+            world_x = local_x + self.offset_x
+            world_y = local_y + self.offset_y
+            
+            odom.pose.pose.position.x = world_x
+            odom.pose.pose.position.y = world_y
+            odom.pose.pose.position.z = local_z
+            
             odom.twist.twist.linear.x = pos.velocity.east_m_s
             odom.twist.twist.linear.y = pos.velocity.north_m_s
             odom.twist.twist.linear.z = -pos.velocity.down_m_s
             self.state_pub.publish(odom)
 
-            self.real_n = pos.position.north_m
-            self.real_e = pos.position.east_m
+            # 3. 更新内部影子变量
+            self.real_n = local_y + self.offset_y
+            self.real_e = local_x + self.offset_x
             self.real_d = pos.position.down_m
 
             if self.latest_target is None and not self.is_landing:
@@ -97,9 +124,8 @@ class MavsdkBridge(Node):
                 self.current_d = self.real_d
 
     async def mavsdk_connect_and_fly(self):
-        # ★ 注意：这里的连接地址可能需要根据实际端口微调，通常 MAVSDK 是通过特定端口监听
-        await self.drone.connect(system_address=f"udp://:{14540 + (self.port - 50052)}") 
-        # 这里的 14540 + offset 只是个示例，具体取决于 PX4 SITL 的 UDP 端口分配
+        # 直接使用动态传入的 mav_port
+        await self.drone.connect(system_address=f"udp://:{self.mav_port}")
 
         async for state in self.drone.core.connection_state():
             if state.is_connected:
@@ -139,8 +165,11 @@ class MavsdkBridge(Node):
                 self.get_logger().info(f"[{self.drone_id}] 收到目标点，执行起飞流程...")
                 try:
                     await self.drone.action.arm()
+                    # 起飞前先发一个初始位置（使用局部坐标）
+                    init_n = self.real_n - self.offset_y
+                    init_e = self.real_e - self.offset_x
                     await self.drone.offboard.set_position_ned(
-                        PositionNedYaw(self.current_n, self.current_e, self.current_d, 0.0)
+                        PositionNedYaw(init_n, init_e, self.real_d, 0.0)
                     )
                     await self.drone.offboard.start()
                     self.is_airborne = True
@@ -158,27 +187,41 @@ class MavsdkBridge(Node):
                 else:
                     max_step = 0.15
 
-                target_n = self.latest_target.pose.position.y
-                target_e = self.latest_target.pose.position.x
+                # 中枢发来的是世界坐标，我们要减掉偏移，转回 PX4 的局部坐标
+                target_e = self.latest_target.pose.position.x - self.offset_x
+                target_n = self.latest_target.pose.position.y - self.offset_y
                 target_d = -self.latest_target.pose.position.z
 
                 if target_d > 0.0:
                     target_d = 0.0
 
-                diff_n = target_n - self.current_n
-                diff_e = target_e - self.current_e
+                # 影子位置计算需要把世界坐标转回局部
+                diff_n = target_n - (self.current_n - self.offset_y)
+                diff_e = target_e - (self.current_e - self.offset_x)
                 diff_d = target_d - self.current_d
+                
                 distance = math.sqrt(diff_n**2 + diff_e**2 + diff_d**2)
 
                 if distance > max_step:
-                    self.current_n += (diff_n / distance) * max_step
-                    self.current_e += (diff_e / distance) * max_step
-                    self.current_d += (diff_d / distance) * max_step
+                    step_n = (diff_n / distance) * max_step
+                    step_e = (diff_e / distance) * max_step
+                    step_d = (diff_d / distance) * max_step
                 else:
-                    self.current_n, self.current_e, self.current_d = target_n, target_e, target_d
+                    step_n = diff_n
+                    step_e = diff_e
+                    step_d = diff_d
+
+                # 更新影子位置（局部坐标系下）
+                local_current_n = self.current_n - self.offset_y + step_n
+                local_current_e = self.current_e - self.offset_x + step_e
+                self.current_d += step_d
+
+                # 存回世界坐标系
+                self.current_n = local_current_n + self.offset_y
+                self.current_e = local_current_e + self.offset_x
 
                 await self.drone.offboard.set_position_ned(
-                    PositionNedYaw(self.current_n, self.current_e, self.current_d, 0.0)
+                    PositionNedYaw(local_current_n, local_current_e, self.current_d, 0.0)
                 )
 
             # 降落
@@ -214,6 +257,7 @@ class MavsdkBridge(Node):
                 except Exception as e:
                     await asyncio.sleep(0.5)
             await asyncio.sleep(0.05)
+
 
 def main(args=None):
     rclpy.init(args=args)
