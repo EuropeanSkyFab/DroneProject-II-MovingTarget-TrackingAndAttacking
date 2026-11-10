@@ -147,8 +147,8 @@ class CenterNode(Node):
         
         #  物理安全边界配置（按需修改）
         self.MAX_XY_DIST = 1000.0   # 水平最大允许坐标（米），超过则丢弃
-        self.MAX_ALT = 100.0        # 最大相对高度（米），比如上限 100 米
-        self.MIN_ALT = -50.0        # 最低相对高度（米，因为向下为负，比如限制最低到 -50 米）
+        self.MAX_ALT = 50.0        # 最大相对高度（米），比如上限 100 米
+        self.MIN_ALT = 3.0     # 最低相对高度（米，因为向下为负，比如限制最低到 -50 米）
         
         # 落地判定阈值（用于 RETURN 后自动回 GROUND）
         self.LAND_ALT_THRESHOLD = 0.3      # 高度低于此值视为落地（米）
@@ -161,8 +161,8 @@ class CenterNode(Node):
         self.COLLISION_DANGER_DIST = 6.0 # 危险紧急排斥的距离
         
         # 延迟阈值（秒），用于检测数据的时效与可信度（按需修改）
-        self.max_vision_delay = 0.2     # 视觉模块数据的时效
-        self.max_plan_delay = 0.5       # 规划模块数据的时效
+        self.max_vision_delay = 0.5     # 视觉模块数据的时效
+        self.max_plan_delay = 0.8      # 规划模块数据的时效
         
         # 检测内存的老数据，以便后续清出
         self.last_plan_time = 0.0 # 记录最后一次收到规划数据的时间
@@ -186,8 +186,28 @@ class CenterNode(Node):
     def send_single_target(self, drone_id, target_msg):
         if target_msg is None or drone_id not in self.fmu_pubs:
             return
+        
         out_msg = copy.deepcopy(target_msg)
         out_msg.header.frame_id = "world"
+        
+        # =================【全局安全限幅：绝对电子围栏】=================
+        current_mode = self.drone_modes.get(drone_id, "GROUND")
+        
+        # 1. 无条件限制最高高度（带 1.0 米的回差缓冲）
+        if out_msg.pose.position.z > self.MAX_ALT + 1.0:
+            out_msg.pose.position.z = self.MAX_ALT
+            self.get_logger().warn(f"[{drone_id}] 警告：目标高度超过上限，强制拦截在 {self.MAX_ALT}m！", throttle_duration_sec=2.0)
+
+        # 2. 有条件限制最低高度（仅在常规追踪、悬停时生效）
+        if current_mode not in ["TAKEOFF", "RETURN", "ATTACK"]:
+            # 带 0.5 米的回差缓冲，只要跌破 2.5 就被拽回 2.6
+            if out_msg.pose.position.z < self.MIN_ALT:
+                out_msg.pose.position.z = self.MIN_ALT + 0.1 # 加0.1米即可，不要加0.5，否则飞控会向上跳
+                
+                # 这里用 warn，且加 throttle
+                self.get_logger().warn(f"[{drone_id}] 目标高度过低，强制拉高至 {self.MIN_ALT + 0.1:.1f}m", throttle_duration_sec=2.0)
+        # ================================================================
+                
         self.fmu_pubs[drone_id].publish(out_msg)
 
 

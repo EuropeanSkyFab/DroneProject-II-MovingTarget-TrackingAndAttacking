@@ -24,11 +24,12 @@ ros2_ws/
 |   ├── 课题二内部接口规范.md
 |   └── 内部分工细节.md
 ├── mock_nodes/             # 假节点，用于测试自己的数据
-|   ├── launch_control_dry_version.py       # 测试数据用的GUI界面程序，直接运行这个
-|   ├── mock_mavsdk_bridge_dry.py
+|   ├── launch_control.py       # 测试数据用的GUI界面程序，直接运行这个，可运行launch也可直接运行py节点
+|   ├── mock_mavsdk_bridge_dry.py       # 给没有PX4+Gazebo环境的组员用的，在上面那个GUI界面里手动更改
 |   ├── mock_mavsdk_bridge.py
 |   ├── mock_plan_node.py
-|   └── mock_vision_node.py
+|   ├── mock_vision_node.py
+|   └── fake_camera.py      # 假相机，给视觉用的（做的很糙）
 └── src/                    # 所有源码放这里
     └── center_node_pkg/    # 【系统集成】中枢节点包
         ├── center_node_pkg/
@@ -264,4 +265,4 @@ def callback(self, msg):
     3.  **安全验收**：联调时，务必进行“直接杀进程”的极限测试，验证飞控是否能在 0.5 秒内接管并安全降落。
 ---
 
-*Latest Update：2026-11-3 by EuroepanSkyFab*
+*Latest Update：2026-11-10 by EuroepanSkyFab*
