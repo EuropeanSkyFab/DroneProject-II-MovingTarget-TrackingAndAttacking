@@ -1,0 +1,366 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<sdf version="1.9">
+  <world name="moving_target_arena">
+    <physics type="ode">
+      <max_step_size>0.004</max_step_size>
+      <real_time_factor>1.0</real_time_factor>
+      <real_time_update_rate>250</real_time_update_rate>
+    </physics>
+    <plugin name="gz::sim::systems::Physics" filename="gz-sim-physics-system"/>
+    <plugin name="gz::sim::systems::UserCommands" filename="gz-sim-user-commands-system"/>
+    <plugin name="gz::sim::systems::SceneBroadcaster" filename="gz-sim-scene-broadcaster-system"/>
+    <plugin name="gz::sim::systems::Contact" filename="gz-sim-contact-system"/>
+    <plugin name="gz::sim::systems::Imu" filename="gz-sim-imu-system"/>
+    <plugin name="gz::sim::systems::AirPressure" filename="gz-sim-air-pressure-system"/>
+    <plugin name="gz::sim::systems::ApplyLinkWrench" filename="gz-sim-apply-link-wrench-system"/>
+    <plugin name="gz::sim::systems::NavSat" filename="gz-sim-navsat-system"/>
+    <plugin name="gz::sim::systems::WindEffects" filename="gz-sim-wind-effects-system"/>
+    <plugin name="gz::sim::systems::Sensors" filename="gz-sim-sensors-system">
+      <render_engine>ogre2</render_engine>
+    </plugin>
+
+    <gravity>0 0 -9.8</gravity>
+    <magnetic_field>6e-06 2.3e-05 -4.2e-05</magnetic_field>
+    <atmosphere type="adiabatic"/>
+    <wind>
+      <linear_velocity>0.8 -0.4 0.0</linear_velocity>
+    </wind>
+
+    <scene>
+      <grid>false</grid>
+      <ambient>0.46 0.50 0.56 1</ambient>
+      <background>0.58 0.76 0.94 1</background>
+      <shadows>true</shadows>
+      <sky>
+        <clouds>
+          <speed>10</speed>
+        </clouds>
+      </sky>
+    </scene>
+
+    <light name="sunUTC" type="directional">
+      <pose>0 0 500 0 0 0</pose>
+      <cast_shadows>true</cast_shadows>
+      <intensity>1.85</intensity>
+      <direction>0.42 0.36 -0.60</direction>
+      <diffuse>1.00 0.94 0.84 1</diffuse>
+      <specular>0.45 0.42 0.38 1</specular>
+    </light>
+
+    <!-- 1. 高清纹理化户外草坪试验场地面（无红色成分） -->
+    <model name="ground_plane">
+      <static>true</static>
+      <link name="link">
+        <collision name="collision">
+          <geometry><plane><normal>0 0 1</normal><size>400 400</size></plane></geometry>
+          <surface>
+            <friction><ode><mu>0.8</mu><mu2>0.8</mu2></ode></friction>
+          </surface>
+        </collision>
+        <visual name="visual">
+          <cast_shadows>false</cast_shadows>
+          <geometry><plane><normal>0 0 1</normal><size>400 400</size></plane></geometry>
+          <material>
+            <ambient>0.85 0.90 0.85 1</ambient>
+            <diffuse>0.95 0.98 0.95 1</diffuse>
+            <pbr>
+              <metal>
+                <albedo_map>model://arena_assets/materials/textures/terrain_meadow.png</albedo_map>
+                <roughness>0.92</roughness>
+                <metalness>0.0</metalness>
+              </metal>
+            </pbr>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- 2. 无人机综合试飞跑道 + 专属三机停机坪 H1(0,0) / H2(0,3) / H3(0,6) -->
+    <model name="airfield_runway_and_pads">
+      <static>true</static>
+      <pose>0 0 0.004 0 0 0</pose>
+      <link name="link">
+        <visual name="main_runway">
+          <pose>16.0 3.0 0.0 0 0 0</pose>
+          <cast_shadows>false</cast_shadows>
+          <geometry><box><size>44.0 16.0 0.008</size></box></geometry>
+          <material>
+            <ambient>0.9 0.9 0.9 1</ambient><diffuse>0.95 0.95 0.95 1</diffuse>
+            <pbr><metal><albedo_map>model://arena_assets/materials/textures/asphalt_runway.png</albedo_map><roughness>0.85</roughness></metal></pbr>
+          </material>
+        </visual>
+        <visual name="apron_pad_strip">
+          <pose>-1.2 3.0 0.002 0 0 0</pose>
+          <cast_shadows>false</cast_shadows>
+          <geometry><box><size>5.2 11.5 0.008</size></box></geometry>
+          <material><ambient>0.26 0.29 0.34 1</ambient><diffuse>0.34 0.38 0.44 1</diffuse></material>
+        </visual>
+        <!-- H1 (0, 0) -->
+        <visual name="helipad_h1">
+          <pose>0.0 0.0 0.008 0 0 0</pose>
+          <cast_shadows>false</cast_shadows>
+          <geometry><box><size>2.2 2.2 0.006</size></box></geometry>
+          <material>
+            <ambient>0.95 0.95 0.95 1</ambient><diffuse>1 1 1 1</diffuse>
+            <pbr><metal><albedo_map>model://arena_assets/materials/textures/helipad_h1.png</albedo_map><roughness>0.75</roughness></metal></pbr>
+          </material>
+        </visual>
+        <!-- H2 (0, 3) -->
+        <visual name="helipad_h2">
+          <pose>0.0 3.0 0.008 0 0 0</pose>
+          <cast_shadows>false</cast_shadows>
+          <geometry><box><size>2.2 2.2 0.006</size></box></geometry>
+          <material>
+            <ambient>0.95 0.95 0.95 1</ambient><diffuse>1 1 1 1</diffuse>
+            <pbr><metal><albedo_map>model://arena_assets/materials/textures/helipad_h2.png</albedo_map><roughness>0.75</roughness></metal></pbr>
+          </material>
+        </visual>
+        <!-- H3 (0, 6) -->
+        <visual name="helipad_h3">
+          <pose>0.0 6.0 0.008 0 0 0</pose>
+          <cast_shadows>false</cast_shadows>
+          <geometry><box><size>2.2 2.2 0.006</size></box></geometry>
+          <material>
+            <ambient>0.95 0.95 0.95 1</ambient><diffuse>1 1 1 1</diffuse>
+            <pbr><metal><albedo_map>model://arena_assets/materials/textures/helipad_h3.png</albedo_map><roughness>0.75</roughness></metal></pbr>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- 3. 试飞场建筑与外围自然地形丘陵（机库、集装箱、树林、山丘、航标、地面无人车） -->
+    <model name="proving_ground_scenery">
+      <static>true</static>
+      <link name="link">
+        <!-- 北侧主机库 + 太阳能屋顶 -->
+        <visual name="hangar_1_body">
+          <pose>22.0 16.0 2.1 0 0 0</pose>
+          <geometry><box><size>9.0 5.5 4.2</size></box></geometry>
+          <material>
+            <ambient>0.85 0.85 0.88 1</ambient><diffuse>0.95 0.95 0.98 1</diffuse>
+            <pbr><metal><albedo_map>model://arena_assets/materials/textures/hangar_siding.png</albedo_map><roughness>0.6</roughness></metal></pbr>
+          </material>
+        </visual>
+        <visual name="hangar_1_roof">
+          <pose>22.0 16.0 4.35 0 0 0</pose>
+          <geometry><box><size>9.4 6.0 0.35</size></box></geometry>
+          <material>
+            <ambient>0.9 0.9 0.9 1</ambient><diffuse>0.95 0.95 0.95 1</diffuse>
+            <pbr><metal><albedo_map>model://arena_assets/materials/textures/hangar_roof.png</albedo_map><roughness>0.35</roughness><metalness>0.4</metalness></metal></pbr>
+          </material>
+        </visual>
+        <visual name="hangar_1_bay_door">
+          <pose>22.0 13.22 1.6 0 0 0</pose>
+          <geometry><box><size>5.2 0.12 3.2</size></box></geometry>
+          <material><ambient>0.14 0.18 0.22 1</ambient><diffuse>0.22 0.26 0.32 1</diffuse></material>
+        </visual>
+
+        <!-- 东侧维修机库 -->
+        <visual name="hangar_2_body">
+          <pose>41.0 2.0 1.9 0 0 1.570796</pose>
+          <geometry><box><size>8.0 5.0 3.8</size></box></geometry>
+          <material>
+            <ambient>0.85 0.85 0.88 1</ambient><diffuse>0.95 0.95 0.98 1</diffuse>
+            <pbr><metal><albedo_map>model://arena_assets/materials/textures/hangar_siding.png</albedo_map><roughness>0.6</roughness></metal></pbr>
+          </material>
+        </visual>
+        <visual name="hangar_2_roof">
+          <pose>41.0 2.0 3.95 0 0 1.570796</pose>
+          <geometry><box><size>8.4 5.4 0.35</size></box></geometry>
+          <material>
+            <ambient>0.9 0.9 0.9 1</ambient><diffuse>0.95 0.95 0.95 1</diffuse>
+            <pbr><metal><albedo_map>model://arena_assets/materials/textures/hangar_roof.png</albedo_map><roughness>0.35</roughness><metalness>0.4</metalness></metal></pbr>
+          </material>
+        </visual>
+
+        <!-- 货运集装箱组（蓝/黄高对比地标，无红色，显式设置 ambient/diffuse 确保 PBR 非黑） -->
+        <visual name="container_1">
+          <pose>11.0 15.5 1.3 0 0 0.15</pose>
+          <geometry><box><size>6.0 2.45 2.6</size></box></geometry>
+          <material>
+            <ambient>0.9 0.9 0.9 1</ambient><diffuse>1 1 1 1</diffuse>
+            <pbr><metal><albedo_map>model://arena_assets/materials/textures/container_blue.png</albedo_map><roughness>0.55</roughness></metal></pbr>
+          </material>
+        </visual>
+        <visual name="container_2">
+          <pose>11.2 12.6 1.3 0 0 0.08</pose>
+          <geometry><box><size>6.0 2.45 2.6</size></box></geometry>
+          <material>
+            <ambient>0.9 0.9 0.9 1</ambient><diffuse>1 1 1 1</diffuse>
+            <pbr><metal><albedo_map>model://arena_assets/materials/textures/container_ochre.png</albedo_map><roughness>0.55</roughness></metal></pbr>
+          </material>
+        </visual>
+        <visual name="container_3">
+          <pose>18.0 -9.5 1.3 0 0 -0.2</pose>
+          <geometry><box><size>6.0 2.45 2.6</size></box></geometry>
+          <material>
+            <ambient>0.9 0.9 0.9 1</ambient><diffuse>1 1 1 1</diffuse>
+            <pbr><metal><albedo_map>model://arena_assets/materials/textures/container_blue.png</albedo_map><roughness>0.55</roughness></metal></pbr>
+          </material>
+        </visual>
+
+        <!-- 跑道边界助航灯标柱（含顶部发光灯帽） -->
+        <visual name="pylon_nw"><pose>6.0 11.4 1.35 0 0 0</pose><geometry><cylinder><radius>0.18</radius><length>2.7</length></cylinder></geometry><material><ambient>0.16 0.50 0.88 1</ambient><diffuse>0.20 0.58 0.96 1</diffuse></material></visual>
+        <visual name="pylon_nw_beacon"><pose>6.0 11.4 2.78 0 0 0</pose><geometry><sphere><radius>0.22</radius></sphere></geometry><material><ambient>0.20 0.75 1.0 1</ambient><diffuse>0.30 0.85 1.0 1</diffuse><emissive>0.2 0.6 1.0 1</emissive></material></visual>
+        <visual name="pylon_ne"><pose>20.0 11.4 1.35 0 0 0</pose><geometry><cylinder><radius>0.18</radius><length>2.7</length></cylinder></geometry><material><ambient>0.16 0.50 0.88 1</ambient><diffuse>0.20 0.58 0.96 1</diffuse></material></visual>
+        <visual name="pylon_ne_beacon"><pose>20.0 11.4 2.78 0 0 0</pose><geometry><sphere><radius>0.22</radius></sphere></geometry><material><ambient>0.20 0.75 1.0 1</ambient><diffuse>0.30 0.85 1.0 1</diffuse><emissive>0.2 0.6 1.0 1</emissive></material></visual>
+        <visual name="pylon_sw"><pose>6.0 -5.4 1.35 0 0 0</pose><geometry><cylinder><radius>0.18</radius><length>2.7</length></cylinder></geometry><material><ambient>0.92 0.74 0.16 1</ambient><diffuse>0.96 0.80 0.22 1</diffuse></material></visual>
+        <visual name="pylon_sw_beacon"><pose>6.0 -5.4 2.78 0 0 0</pose><geometry><sphere><radius>0.22</radius></sphere></geometry><material><ambient>1.0 0.82 0.20 1</ambient><diffuse>1.0 0.88 0.25 1</diffuse><emissive>0.8 0.6 0.1 1</emissive></material></visual>
+        <visual name="pylon_se"><pose>20.0 -5.4 1.35 0 0 0</pose><geometry><cylinder><radius>0.18</radius><length>2.7</length></cylinder></geometry><material><ambient>0.92 0.74 0.16 1</ambient><diffuse>0.96 0.80 0.22 1</diffuse></material></visual>
+        <visual name="pylon_se_beacon"><pose>20.0 -5.4 2.78 0 0 0</pose><geometry><sphere><radius>0.22</radius></sphere></geometry><material><ambient>1.0 0.82 0.20 1</ambient><diffuse>1.0 0.88 0.25 1</diffuse><emissive>0.8 0.6 0.1 1</emissive></material></visual>
+
+        <!-- 外围多层塔松林（替代纯圆球树，真实锥形松冠+树干阴影） -->
+        <visual name="pine_trunk_1"><pose>4.0 -11.5 1.0 0 0 0</pose><geometry><cylinder><radius>0.20</radius><length>2.0</length></cylinder></geometry><material><ambient>0.30 0.20 0.13 1</ambient><diffuse>0.38 0.26 0.17 1</diffuse></material></visual>
+        <visual name="pine_c1a"><pose>4.0 -11.5 2.5 0 0 0</pose><geometry><cone><radius>1.65</radius><length>2.2</length></cone></geometry><material><ambient>0.12 0.30 0.12 1</ambient><diffuse>0.16 0.40 0.15 1</diffuse></material></visual>
+        <visual name="pine_c1b"><pose>4.0 -11.5 3.6 0 0 0</pose><geometry><cone><radius>1.25</radius><length>1.9</length></cone></geometry><material><ambient>0.14 0.34 0.14 1</ambient><diffuse>0.19 0.45 0.18 1</diffuse></material></visual>
+        <visual name="pine_c1c"><pose>4.0 -11.5 4.5 0 0 0</pose><geometry><cone><radius>0.82</radius><length>1.5</length></cone></geometry><material><ambient>0.16 0.38 0.15 1</ambient><diffuse>0.22 0.50 0.20 1</diffuse></material></visual>
+
+        <visual name="pine_trunk_2"><pose>11.5 -12.0 1.1 0 0 0</pose><geometry><cylinder><radius>0.22</radius><length>2.2</length></cylinder></geometry><material><ambient>0.30 0.20 0.13 1</ambient><diffuse>0.38 0.26 0.17 1</diffuse></material></visual>
+        <visual name="pine_c2a"><pose>11.5 -12.0 2.8 0 0 0</pose><geometry><cone><radius>1.85</radius><length>2.5</length></cone></geometry><material><ambient>0.11 0.28 0.12 1</ambient><diffuse>0.15 0.37 0.14 1</diffuse></material></visual>
+        <visual name="pine_c2b"><pose>11.5 -12.0 4.0 0 0 0</pose><geometry><cone><radius>1.40</radius><length>2.1</length></cone></geometry><material><ambient>0.13 0.32 0.13 1</ambient><diffuse>0.18 0.42 0.17 1</diffuse></material></visual>
+        <visual name="pine_c2c"><pose>11.5 -12.0 5.0 0 0 0</pose><geometry><cone><radius>0.90</radius><length>1.6</length></cone></geometry><material><ambient>0.16 0.37 0.15 1</ambient><diffuse>0.21 0.48 0.19 1</diffuse></material></visual>
+
+        <visual name="pine_trunk_3"><pose>29.0 -11.0 1.2 0 0 0</pose><geometry><cylinder><radius>0.23</radius><length>2.4</length></cylinder></geometry><material><ambient>0.30 0.20 0.13 1</ambient><diffuse>0.38 0.26 0.17 1</diffuse></material></visual>
+        <visual name="pine_c3a"><pose>29.0 -11.0 3.0 0 0 0</pose><geometry><cone><radius>1.95</radius><length>2.6</length></cone></geometry><material><ambient>0.12 0.31 0.13 1</ambient><diffuse>0.17 0.41 0.16 1</diffuse></material></visual>
+        <visual name="pine_c3b"><pose>29.0 -11.0 4.3 0 0 0</pose><geometry><cone><radius>1.45</radius><length>2.2</length></cone></geometry><material><ambient>0.15 0.35 0.14 1</ambient><diffuse>0.20 0.46 0.18 1</diffuse></material></visual>
+        <visual name="pine_c3c"><pose>29.0 -11.0 5.4 0 0 0</pose><geometry><cone><radius>0.92</radius><length>1.6</length></cone></geometry><material><ambient>0.18 0.40 0.16 1</ambient><diffuse>0.23 0.52 0.21 1</diffuse></material></visual>
+
+        <visual name="pine_trunk_4"><pose>31.0 15.0 1.1 0 0 0</pose><geometry><cylinder><radius>0.22</radius><length>2.2</length></cylinder></geometry><material><ambient>0.30 0.20 0.13 1</ambient><diffuse>0.38 0.26 0.17 1</diffuse></material></visual>
+        <visual name="pine_c4a"><pose>31.0 15.0 2.8 0 0 0</pose><geometry><cone><radius>1.75</radius><length>2.3</length></cone></geometry><material><ambient>0.11 0.29 0.12 1</ambient><diffuse>0.16 0.39 0.15 1</diffuse></material></visual>
+        <visual name="pine_c4b"><pose>31.0 15.0 3.9 0 0 0</pose><geometry><cone><radius>1.30</radius><length>1.9</length></cone></geometry><material><ambient>0.14 0.34 0.14 1</ambient><diffuse>0.19 0.44 0.18 1</diffuse></material></visual>
+        <visual name="pine_c4c"><pose>31.0 15.0 4.9 0 0 0</pose><geometry><cone><radius>0.84</radius><length>1.5</length></cone></geometry><material><ambient>0.16 0.38 0.15 1</ambient><diffuse>0.22 0.49 0.19 1</diffuse></material></visual>
+
+        <visual name="pine_trunk_5"><pose>-8.5 -10.5 1.1 0 0 0</pose><geometry><cylinder><radius>0.20</radius><length>2.2</length></cylinder></geometry><material><ambient>0.30 0.20 0.13 1</ambient><diffuse>0.38 0.26 0.17 1</diffuse></material></visual>
+        <visual name="pine_c5a"><pose>-8.5 -10.5 2.7 0 0 0</pose><geometry><cone><radius>1.70</radius><length>2.3</length></cone></geometry><material><ambient>0.12 0.30 0.12 1</ambient><diffuse>0.16 0.40 0.16 1</diffuse></material></visual>
+        <visual name="pine_c5b"><pose>-8.5 -10.5 3.9 0 0 0</pose><geometry><cone><radius>1.25</radius><length>1.9</length></cone></geometry><material><ambient>0.15 0.35 0.14 1</ambient><diffuse>0.20 0.46 0.18 1</diffuse></material></visual>
+
+        <visual name="pine_trunk_6"><pose>38.0 -13.5 1.2 0 0 0</pose><geometry><cylinder><radius>0.22</radius><length>2.4</length></cylinder></geometry><material><ambient>0.30 0.20 0.13 1</ambient><diffuse>0.38 0.26 0.17 1</diffuse></material></visual>
+        <visual name="pine_c6a"><pose>38.0 -13.5 3.0 0 0 0</pose><geometry><cone><radius>1.85</radius><length>2.5</length></cone></geometry><material><ambient>0.11 0.28 0.12 1</ambient><diffuse>0.15 0.38 0.15 1</diffuse></material></visual>
+        <visual name="pine_c6b"><pose>38.0 -13.5 4.2 0 0 0</pose><geometry><cone><radius>1.35</radius><length>2.0</length></cone></geometry><material><ambient>0.14 0.34 0.14 1</ambient><diffuse>0.19 0.45 0.18 1</diffuse></material></visual>
+
+        <!-- 远景缓坡山丘（压低半球贴合地面，显式赋予纹理漫反射，远离主航线保持视野通透） -->
+        <visual name="hill_north">
+          <pose>24.0 48.0 -9.0 0 0 0</pose>
+          <geometry><ellipsoid><radii>26.0 18.0 16.0</radii></ellipsoid></geometry>
+          <material>
+            <ambient>0.85 0.90 0.85 1</ambient><diffuse>0.95 0.98 0.95 1</diffuse>
+            <pbr><metal><albedo_map>model://arena_assets/materials/textures/terrain_hill.png</albedo_map><roughness>0.95</roughness></metal></pbr>
+          </material>
+        </visual>
+        <visual name="hill_east">
+          <pose>68.0 6.0 -10.0 0 0 0</pose>
+          <geometry><ellipsoid><radii>22.0 34.0 18.0</radii></ellipsoid></geometry>
+          <material>
+            <ambient>0.85 0.90 0.85 1</ambient><diffuse>0.95 0.98 0.95 1</diffuse>
+            <pbr><metal><albedo_map>model://arena_assets/materials/textures/terrain_hill.png</albedo_map><roughness>0.95</roughness></metal></pbr>
+          </material>
+        </visual>
+        <visual name="hill_south">
+          <pose>20.0 -46.0 -8.0 0 0 0</pose>
+          <geometry><ellipsoid><radii>28.0 18.0 14.0</radii></ellipsoid></geometry>
+          <material>
+            <ambient>0.85 0.90 0.85 1</ambient><diffuse>0.95 0.98 0.95 1</diffuse>
+            <pbr><metal><albedo_map>model://arena_assets/materials/textures/terrain_hill.png</albedo_map><roughness>0.95</roughness></metal></pbr>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- 3B. 完整带四轮地面无人保障车 x2 (r1_rover 全套 STL 网格) -->
+    <model name="parked_ugv_west">
+      <static>true</static>
+      <pose>2.5 10.2 0.069 0 0 -0.4</pose>
+      <link name="link">
+        <visual name="chassis"><geometry><mesh><scale>1.3 1.3 1.3</scale><uri>model://r1_rover/meshes/chassis_link.STL</uri></mesh></geometry><material><ambient>0.75 0.78 0.82 1</ambient><diffuse>0.88 0.90 0.94 1</diffuse></material></visual>
+        <visual name="top"><pose>0 0 0.1488 0 0 0</pose><geometry><mesh><scale>1.3 1.3 1.3</scale><uri>model://r1_rover/meshes/top_link.STL</uri></mesh></geometry><material><ambient>0.18 0.44 0.78 1</ambient><diffuse>0.24 0.54 0.90 1</diffuse></material></visual>
+        <visual name="housing"><pose>0.0451 0 0.1488 0 0 0</pose><geometry><mesh><scale>1.3 1.3 1.3</scale><uri>model://r1_rover/meshes/housing_link.STL</uri></mesh></geometry><material><ambient>0.16 0.18 0.22 1</ambient><diffuse>0.24 0.27 0.32 1</diffuse></material></visual>
+        <visual name="battery"><pose>-0.1209 0 0.1488 0 0 0</pose><geometry><mesh><scale>1.3 1.3 1.3</scale><uri>model://r1_rover/meshes/battery_link.STL</uri></mesh></geometry><material><ambient>0.12 0.12 0.14 1</ambient><diffuse>0.18 0.18 0.22 1</diffuse></material></visual>
+        <visual name="ant_l"><pose>-0.2035 0.0991 0.1488 0 0 0</pose><geometry><mesh><scale>1.3 1.3 1.3</scale><uri>model://r1_rover/meshes/antenna_link.STL</uri></mesh></geometry><material><ambient>0.12 0.12 0.14 1</ambient><diffuse>0.20 0.20 0.24 1</diffuse></material></visual>
+        <visual name="ant_r"><pose>-0.2035 -0.0991 0.1488 0 0 0</pose><geometry><mesh><scale>1.3 1.3 1.3</scale><uri>model://r1_rover/meshes/antenna_link.STL</uri></mesh></geometry><material><ambient>0.12 0.12 0.14 1</ambient><diffuse>0.20 0.20 0.24 1</diffuse></material></visual>
+        <visual name="wheel_lf"><pose>0.195 0.2121 0.0280 0 0 0</pose><geometry><mesh><scale>1.3 1.3 1.3</scale><uri>model://r1_rover/meshes/wheel_link.STL</uri></mesh></geometry><material><ambient>0.10 0.10 0.12 1</ambient><diffuse>0.16 0.16 0.18 1</diffuse></material></visual>
+        <visual name="wheel_lb"><pose>-0.195 0.2121 0.0280 0 0 0</pose><geometry><mesh><scale>1.3 1.3 1.3</scale><uri>model://r1_rover/meshes/wheel_link.STL</uri></mesh></geometry><material><ambient>0.10 0.10 0.12 1</ambient><diffuse>0.16 0.16 0.18 1</diffuse></material></visual>
+        <visual name="wheel_rf"><pose>0.195 -0.2121 0.0280 0 0 0</pose><geometry><mesh><scale>1.3 1.3 1.3</scale><uri>model://r1_rover/meshes/wheel_link.STL</uri></mesh></geometry><material><ambient>0.10 0.10 0.12 1</ambient><diffuse>0.16 0.16 0.18 1</diffuse></material></visual>
+        <visual name="wheel_rb"><pose>-0.195 -0.2121 0.0280 0 0 0</pose><geometry><mesh><scale>1.3 1.3 1.3</scale><uri>model://r1_rover/meshes/wheel_link.STL</uri></mesh></geometry><material><ambient>0.10 0.10 0.12 1</ambient><diffuse>0.16 0.16 0.18 1</diffuse></material></visual>
+      </link>
+    </model>
+    <model name="parked_ugv_east">
+      <static>true</static>
+      <pose>34.5 6.8 0.069 0 0 2.75</pose>
+      <link name="link">
+        <visual name="chassis"><geometry><mesh><scale>1.3 1.3 1.3</scale><uri>model://r1_rover/meshes/chassis_link.STL</uri></mesh></geometry><material><ambient>0.75 0.78 0.82 1</ambient><diffuse>0.88 0.90 0.94 1</diffuse></material></visual>
+        <visual name="top"><pose>0 0 0.1488 0 0 0</pose><geometry><mesh><scale>1.3 1.3 1.3</scale><uri>model://r1_rover/meshes/top_link.STL</uri></mesh></geometry><material><ambient>0.82 0.56 0.14 1</ambient><diffuse>0.92 0.68 0.18 1</diffuse></material></visual>
+        <visual name="housing"><pose>0.0451 0 0.1488 0 0 0</pose><geometry><mesh><scale>1.3 1.3 1.3</scale><uri>model://r1_rover/meshes/housing_link.STL</uri></mesh></geometry><material><ambient>0.16 0.18 0.22 1</ambient><diffuse>0.24 0.27 0.32 1</diffuse></material></visual>
+        <visual name="battery"><pose>-0.1209 0 0.1488 0 0 0</pose><geometry><mesh><scale>1.3 1.3 1.3</scale><uri>model://r1_rover/meshes/battery_link.STL</uri></mesh></geometry><material><ambient>0.12 0.12 0.14 1</ambient><diffuse>0.18 0.18 0.22 1</diffuse></material></visual>
+        <visual name="ant_l"><pose>-0.2035 0.0991 0.1488 0 0 0</pose><geometry><mesh><scale>1.3 1.3 1.3</scale><uri>model://r1_rover/meshes/antenna_link.STL</uri></mesh></geometry><material><ambient>0.12 0.12 0.14 1</ambient><diffuse>0.20 0.20 0.24 1</diffuse></material></visual>
+        <visual name="ant_r"><pose>-0.2035 -0.0991 0.1488 0 0 0</pose><geometry><mesh><scale>1.3 1.3 1.3</scale><uri>model://r1_rover/meshes/antenna_link.STL</uri></mesh></geometry><material><ambient>0.12 0.12 0.14 1</ambient><diffuse>0.20 0.20 0.24 1</diffuse></material></visual>
+        <visual name="wheel_lf"><pose>0.195 0.2121 0.0280 0 0 0</pose><geometry><mesh><scale>1.3 1.3 1.3</scale><uri>model://r1_rover/meshes/wheel_link.STL</uri></mesh></geometry><material><ambient>0.10 0.10 0.12 1</ambient><diffuse>0.16 0.16 0.18 1</diffuse></material></visual>
+        <visual name="wheel_lb"><pose>-0.195 0.2121 0.0280 0 0 0</pose><geometry><mesh><scale>1.3 1.3 1.3</scale><uri>model://r1_rover/meshes/wheel_link.STL</uri></mesh></geometry><material><ambient>0.10 0.10 0.12 1</ambient><diffuse>0.16 0.16 0.18 1</diffuse></material></visual>
+        <visual name="wheel_rf"><pose>0.195 -0.2121 0.0280 0 0 0</pose><geometry><mesh><scale>1.3 1.3 1.3</scale><uri>model://r1_rover/meshes/wheel_link.STL</uri></mesh></geometry><material><ambient>0.10 0.10 0.12 1</ambient><diffuse>0.16 0.16 0.18 1</diffuse></material></visual>
+        <visual name="wheel_rb"><pose>-0.195 -0.2121 0.0280 0 0 0</pose><geometry><mesh><scale>1.3 1.3 1.3</scale><uri>model://r1_rover/meshes/wheel_link.STL</uri></mesh></geometry><material><ambient>0.10 0.10 0.12 1</ambient><diffuse>0.16 0.16 0.18 1</diffuse></material></visual>
+      </link>
+    </model>
+
+    <!-- 4. 带持续旋转空域监视雷达的塔台 -->
+    <model name="radar_control_tower">
+      <pose>-4.5 14.5 0 0 0 0</pose>
+      <link name="tower_base">
+        <gravity>false</gravity>
+        <inertial><mass>500</mass><inertia><ixx>100</ixx><iyy>100</iyy><izz>100</izz></inertia></inertial>
+        <visual name="shaft">
+          <pose>0 0 2.4 0 0 0</pose>
+          <geometry><box><size>1.8 1.8 4.8</size></box></geometry>
+          <material>
+            <ambient>0.85 0.85 0.88 1</ambient><diffuse>0.95 0.95 0.98 1</diffuse>
+            <pbr><metal><albedo_map>model://arena_assets/materials/textures/hangar_siding.png</albedo_map><roughness>0.65</roughness></metal></pbr>
+          </material>
+        </visual>
+        <visual name="glass_cabin">
+          <pose>0 0 5.3 0 0 0</pose>
+          <geometry><cylinder><radius>1.6</radius><length>1.1</length></cylinder></geometry>
+          <material>
+            <ambient>0.12 0.36 0.62 1.0</ambient><diffuse>0.20 0.56 0.88 1.0</diffuse>
+            <pbr><metal><roughness>0.12</roughness><metalness>0.85</metalness></metal></pbr>
+          </material>
+        </visual>
+        <visual name="roof_cap">
+          <pose>0 0 6.0 0 0 0</pose>
+          <geometry><cylinder><radius>1.75</radius><length>0.3</length></cylinder></geometry>
+          <material><ambient>0.22 0.25 0.30 1</ambient><diffuse>0.35 0.38 0.44 1</diffuse></material>
+        </visual>
+      </link>
+      <joint name="tower_fix" type="fixed"><parent>world</parent><child>tower_base</child></joint>
+      <link name="radar_dish">
+        <gravity>false</gravity>
+        <pose>0 0 6.55 0 0 0</pose>
+        <inertial><mass>2</mass><inertia><ixx>0.2</ixx><iyy>0.2</iyy><izz>0.2</izz></inertia></inertial>
+        <visual name="dish_bar">
+          <geometry><box><size>2.1 0.25 0.45</size></box></geometry>
+          <material><ambient>0.82 0.84 0.88 1</ambient><diffuse>0.94 0.95 0.97 1</diffuse></material>
+        </visual>
+      </link>
+      <joint name="radar_spin_joint" type="revolute">
+        <parent>tower_base</parent><child>radar_dish</child>
+        <axis><xyz>0 0 1</xyz><limit><lower>-1e16</lower><upper>1e16</upper></limit></axis>
+      </joint>
+      <plugin filename="gz-sim-joint-controller-system" name="gz::sim::systems::JointController">
+        <joint_name>radar_spin_joint</joint_name>
+        <initial_velocity>1.4</initial_velocity>
+      </plugin>
+    </model>
+
+    <!-- 5. 空中红色高机动四旋翼靶机（z=5.5m 高空巡航，显著高于地面建筑，旋翼持续旋转） -->
+    <include>
+      <uri>model://red_target_uav</uri>
+      <name>red_moving_target</name>
+      <pose>6.8 0.5 5.5 0 0 0</pose>
+    </include>
+
+    <spherical_coordinates>
+      <surface_model>EARTH_WGS84</surface_model>
+      <world_frame_orientation>ENU</world_frame_orientation>
+      <latitude_deg>47.397971057728974</latitude_deg>
+      <longitude_deg>8.546163739800146</longitude_deg>
+      <elevation>0</elevation>
+    </spherical_coordinates>
+  </world>
+</sdf>
