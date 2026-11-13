@@ -1,0 +1,224 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<sdf version="1.9">
+  <model name="red_target_uav">
+    <static>false</static>
+    <self_collide>false</self_collide>
+
+    <!-- X8 战术飞翼构型 + 四旋翼 VTOL 复合隐身敌机 (无碰撞，确保 5.5~8.5m 立体缠斗安全) -->
+    <link name="target_link">
+      <gravity>false</gravity>
+      <inertial>
+        <mass>2.4</mass>
+        <inertia>
+          <ixx>0.06</ixx><ixy>0</ixy><ixz>0</ixz>
+          <iyy>0.05</iyy><iyz>0</iyz>
+          <izz>0.09</izz>
+        </inertia>
+      </inertial>
+
+      <!-- 主飞翼机身 (Skywalker X8 0.65x 缩放, 翼展 ~1.39m, 高对比战术绯红涂装) -->
+      <visual name="x8_airframe_crimson">
+        <pose>0.3445 -0.6968 -0.065 1.5707963268 0 3.1415926536</pose>
+        <geometry>
+          <mesh>
+            <scale>0.00065 0.00065 0.00065</scale>
+            <uri>model://standard_vtol/meshes/x8_wing.dae</uri>
+          </mesh>
+        </geometry>
+        <material>
+          <ambient>0.96 0.06 0.06 1</ambient>
+          <diffuse>1.0 0.07 0.07 1</diffuse>
+          <emissive>0.26 0.01 0.01 1</emissive>
+          <pbr>
+            <metal>
+              <albedo_map>model://arena_assets/materials/textures/target_crimson.png</albedo_map>
+              <roughness>0.30</roughness>
+              <metalness>0.25</metalness>
+            </metal>
+          </pbr>
+        </material>
+      </visual>
+
+      <!-- 左右碳纤维副翼舵面 -->
+      <visual name="x8_elevon_l">
+        <pose>-0.0682 0.0026 -0.0221 1.5707963268 0 3.1415926536</pose>
+        <geometry>
+          <mesh>
+            <scale>0.00065 0.00065 0.00065</scale>
+            <uri>model://standard_vtol/meshes/x8_elevon_left.dae</uri>
+          </mesh>
+        </geometry>
+        <material>
+          <ambient>0.12 0.12 0.15 1</ambient>
+          <diffuse>0.20 0.20 0.24 1</diffuse>
+        </material>
+      </visual>
+      <visual name="x8_elevon_r">
+        <pose>0.1826 -0.6708 -0.0221 1.5707963268 0 3.1415926536</pose>
+        <geometry>
+          <mesh>
+            <scale>0.00065 0.00065 0.00065</scale>
+            <uri>model://standard_vtol/meshes/x8_elevon_right.dae</uri>
+          </mesh>
+        </geometry>
+        <material>
+          <ambient>0.12 0.12 0.15 1</ambient>
+          <diffuse>0.20 0.20 0.24 1</diffuse>
+        </material>
+      </visual>
+
+      <!-- 纵向碳纤维 VTOL 垂起悬臂与 4 组电机座 -->
+      <visual name="vtol_boom_left">
+        <pose>0 0.23 0.006 0 0 0</pose>
+        <geometry><box><size>0.52 0.024 0.024</size></box></geometry>
+        <material><ambient>0.14 0.14 0.16 1</ambient><diffuse>0.22 0.22 0.26 1</diffuse></material>
+      </visual>
+      <visual name="vtol_boom_right">
+        <pose>0 -0.23 0.006 0 0 0</pose>
+        <geometry><box><size>0.52 0.024 0.024</size></box></geometry>
+        <material><ambient>0.14 0.14 0.16 1</ambient><diffuse>0.22 0.22 0.26 1</diffuse></material>
+      </visual>
+      <visual name="motor_pod_fl">
+        <pose>0.23 0.23 0.028 0 0 0</pose>
+        <geometry><cylinder><radius>0.020</radius><length>0.032</length></cylinder></geometry>
+        <material><ambient>0.18 0.18 0.20 1</ambient><diffuse>0.28 0.28 0.32 1</diffuse></material>
+      </visual>
+      <visual name="motor_pod_fr">
+        <pose>0.23 -0.23 0.028 0 0 0</pose>
+        <geometry><cylinder><radius>0.020</radius><length>0.032</length></cylinder></geometry>
+        <material><ambient>0.18 0.18 0.20 1</ambient><diffuse>0.28 0.28 0.32 1</diffuse></material>
+      </visual>
+      <visual name="motor_pod_rl">
+        <pose>-0.23 0.23 0.028 0 0 0</pose>
+        <geometry><cylinder><radius>0.020</radius><length>0.032</length></cylinder></geometry>
+        <material><ambient>0.18 0.18 0.20 1</ambient><diffuse>0.28 0.28 0.32 1</diffuse></material>
+      </visual>
+      <visual name="motor_pod_rr">
+        <pose>-0.23 -0.23 0.028 0 0 0</pose>
+        <geometry><cylinder><radius>0.020</radius><length>0.032</length></cylinder></geometry>
+        <material><ambient>0.18 0.18 0.20 1</ambient><diffuse>0.28 0.28 0.32 1</diffuse></material>
+      </visual>
+
+      <!-- 机背战术红背脊与雷达罩、腹部侦察吊舱、机尾推进喷口高亮灯 -->
+      <visual name="dorsal_spine">
+        <pose>0.04 0 0.055 0 0 0</pose>
+        <geometry><box><size>0.34 0.14 0.055</size></box></geometry>
+        <material>
+          <ambient>0.98 0.04 0.04 1</ambient>
+          <diffuse>1.0 0.05 0.05 1</diffuse>
+          <emissive>0.32 0.01 0.01 1</emissive>
+        </material>
+      </visual>
+      <visual name="nose_sensor_ball">
+        <pose>0.26 0 -0.025 0 0 0</pose>
+        <geometry><sphere><radius>0.048</radius></sphere></geometry>
+        <material><ambient>0.10 0.12 0.16 1</ambient><diffuse>0.18 0.20 0.26 1</diffuse></material>
+      </visual>
+      <visual name="tail_afterburner_glow">
+        <pose>-0.14 0 0.0 0 1.570796 0</pose>
+        <geometry><cylinder><radius>0.036</radius><length>0.06</length></cylinder></geometry>
+        <material>
+          <ambient>1.0 0.28 0.04 1</ambient>
+          <diffuse>1.0 0.35 0.06 1</diffuse>
+          <emissive>0.85 0.22 0.02 1</emissive>
+        </material>
+      </visual>
+    </link>
+
+    <!-- 四角 VTOL 旋转旋翼 + 尾部推力螺旋桨 -->
+    <link name="rotor_0">
+      <gravity>false</gravity>
+      <pose>0.23 -0.23 0.052 0 0 0</pose>
+      <inertial><mass>0.01</mass><inertia><ixx>1e-5</ixx><iyy>1e-5</iyy><izz>2e-5</izz></inertia></inertial>
+      <visual name="prop">
+        <geometry><mesh><scale>0.82 0.82 0.82</scale><uri>model://standard_vtol/meshes/iris_prop_ccw.dae</uri></mesh></geometry>
+        <material><ambient>0.14 0.14 0.17 1</ambient><diffuse>0.24 0.24 0.28 1</diffuse></material>
+      </visual>
+    </link>
+    <joint name="rotor_0_joint" type="revolute">
+      <parent>target_link</parent><child>rotor_0</child>
+      <axis><xyz>0 0 1</xyz><limit><lower>-1e16</lower><upper>1e16</upper></limit></axis>
+    </joint>
+
+    <link name="rotor_1">
+      <gravity>false</gravity>
+      <pose>-0.23 0.23 0.052 0 0 0</pose>
+      <inertial><mass>0.01</mass><inertia><ixx>1e-5</ixx><iyy>1e-5</iyy><izz>2e-5</izz></inertia></inertial>
+      <visual name="prop">
+        <geometry><mesh><scale>0.82 0.82 0.82</scale><uri>model://standard_vtol/meshes/iris_prop_ccw.dae</uri></mesh></geometry>
+        <material><ambient>0.14 0.14 0.17 1</ambient><diffuse>0.24 0.24 0.28 1</diffuse></material>
+      </visual>
+    </link>
+    <joint name="rotor_1_joint" type="revolute">
+      <parent>target_link</parent><child>rotor_1</child>
+      <axis><xyz>0 0 1</xyz><limit><lower>-1e16</lower><upper>1e16</upper></limit></axis>
+    </joint>
+
+    <link name="rotor_2">
+      <gravity>false</gravity>
+      <pose>0.23 0.23 0.052 0 0 0</pose>
+      <inertial><mass>0.01</mass><inertia><ixx>1e-5</ixx><iyy>1e-5</iyy><izz>2e-5</izz></inertia></inertial>
+      <visual name="prop">
+        <geometry><mesh><scale>0.82 0.82 0.82</scale><uri>model://standard_vtol/meshes/iris_prop_cw.dae</uri></mesh></geometry>
+        <material><ambient>0.14 0.14 0.17 1</ambient><diffuse>0.24 0.24 0.28 1</diffuse></material>
+      </visual>
+    </link>
+    <joint name="rotor_2_joint" type="revolute">
+      <parent>target_link</parent><child>rotor_2</child>
+      <axis><xyz>0 0 1</xyz><limit><lower>-1e16</lower><upper>1e16</upper></limit></axis>
+    </joint>
+
+    <link name="rotor_3">
+      <gravity>false</gravity>
+      <pose>-0.23 -0.23 0.052 0 0 0</pose>
+      <inertial><mass>0.01</mass><inertia><ixx>1e-5</ixx><iyy>1e-5</iyy><izz>2e-5</izz></inertia></inertial>
+      <visual name="prop">
+        <geometry><mesh><scale>0.82 0.82 0.82</scale><uri>model://standard_vtol/meshes/iris_prop_cw.dae</uri></mesh></geometry>
+        <material><ambient>0.14 0.14 0.17 1</ambient><diffuse>0.24 0.24 0.28 1</diffuse></material>
+      </visual>
+    </link>
+    <joint name="rotor_3_joint" type="revolute">
+      <parent>target_link</parent><child>rotor_3</child>
+      <axis><xyz>0 0 1</xyz><limit><lower>-1e16</lower><upper>1e16</upper></limit></axis>
+    </joint>
+
+    <link name="rotor_puller">
+      <gravity>false</gravity>
+      <pose>-0.175 0 0.0 0 1.570796 0</pose>
+      <inertial><mass>0.01</mass><inertia><ixx>1e-5</ixx><iyy>1e-5</iyy><izz>2e-5</izz></inertia></inertial>
+      <visual name="prop">
+        <geometry><mesh><scale>0.75 0.75 0.75</scale><uri>model://standard_vtol/meshes/iris_prop_ccw.dae</uri></mesh></geometry>
+        <material><ambient>0.18 0.18 0.22 1</ambient><diffuse>0.30 0.30 0.34 1</diffuse></material>
+      </visual>
+    </link>
+    <joint name="rotor_puller_joint" type="revolute">
+      <parent>target_link</parent><child>rotor_puller</child>
+      <axis><xyz>0 0 1</xyz><limit><lower>-1e16</lower><upper>1e16</upper></limit></axis>
+    </joint>
+
+    <plugin filename="gz-sim-joint-controller-system" name="gz::sim::systems::JointController">
+      <joint_name>rotor_0_joint</joint_name>
+      <initial_velocity>35.0</initial_velocity>
+    </plugin>
+    <plugin filename="gz-sim-joint-controller-system" name="gz::sim::systems::JointController">
+      <joint_name>rotor_1_joint</joint_name>
+      <initial_velocity>35.0</initial_velocity>
+    </plugin>
+    <plugin filename="gz-sim-joint-controller-system" name="gz::sim::systems::JointController">
+      <joint_name>rotor_2_joint</joint_name>
+      <initial_velocity>-35.0</initial_velocity>
+    </plugin>
+    <plugin filename="gz-sim-joint-controller-system" name="gz::sim::systems::JointController">
+      <joint_name>rotor_3_joint</joint_name>
+      <initial_velocity>-35.0</initial_velocity>
+    </plugin>
+    <plugin filename="gz-sim-joint-controller-system" name="gz::sim::systems::JointController">
+      <joint_name>rotor_puller_joint</joint_name>
+      <initial_velocity>45.0</initial_velocity>
+    </plugin>
+    <plugin filename="gz-sim-velocity-control-system" name="gz::sim::systems::VelocityControl">
+      <initial_linear>0.0 0.0 0.0</initial_linear>
+      <initial_angular>0.0 0.0 0.0</initial_angular>
+    </plugin>
+  </model>
+</sdf>

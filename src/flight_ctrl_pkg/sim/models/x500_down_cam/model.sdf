@@ -1,0 +1,211 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<sdf version="1.9">
+  <model name="x500_down_cam">
+    <include merge="true">
+      <uri>x500</uri>
+    </include>
+
+    <!-- 1. 前斜下视 35° 定焦导航检测相机（严格对齐 vision_pkg camera_mount_rpy=[0.95993109, 0.0, -1.57079633]） -->
+    <link name="down_cam_link">
+      <pose relative_to="base_link">0.12 0.0 -0.04 0.0 0.61086524 0.0</pose>
+      <inertial>
+        <mass>0.015</mass>
+        <inertia>
+          <ixx>0.00001</ixx><ixy>0</ixy><ixz>0</ixz>
+          <iyy>0.00001</iyy><iyz>0</iyz>
+          <izz>0.00001</izz>
+        </inertia>
+      </inertial>
+      <visual name="cam_visual">
+        <geometry><box><size>0.036 0.048 0.032</size></box></geometry>
+        <material>
+          <ambient>0.12 0.14 0.18 1</ambient>
+          <diffuse>0.22 0.25 0.30 1</diffuse>
+        </material>
+      </visual>
+      <sensor name="down_cam" type="camera">
+        <pose>0 0 0 0 0 0</pose>
+        <camera>
+          <horizontal_fov>1.35</horizontal_fov>
+          <image>
+            <width>640</width>
+            <height>480</height>
+            <format>R8G8B8</format>
+          </image>
+          <clip>
+            <near>0.1</near>
+            <far>1200</far>
+          </clip>
+        </camera>
+        <always_on>1</always_on>
+        <update_rate>25</update_rate>
+        <visualize>false</visualize>
+      </sensor>
+    </link>
+    <joint name="DownCamJoint" type="fixed">
+      <parent>base_link</parent>
+      <child>down_cam_link</child>
+      <pose relative_to="base_link">0 0 0 0 0 0</pose>
+    </joint>
+
+    <!-- 2. PX4 原生三轴稳像光电吊舱（由 PX4 gimbal 模块 + SIM_GZ_SV_FUNC1/2/3 物理伺服驱动） -->
+    <link name="gimbal_yaw_link">
+      <pose relative_to="base_link">0.05 0.0 -0.08 0 0 0</pose>
+      <inertial>
+        <mass>0.005</mass>
+        <inertia>
+          <ixx>0.000005</ixx><ixy>0</ixy><ixz>0</ixz>
+          <iyy>0.000005</iyy><iyz>0</iyz>
+          <izz>0.000005</izz>
+        </inertia>
+      </inertial>
+      <visual name="gimbal_base_collar">
+        <geometry><cylinder><radius>0.022</radius><length>0.018</length></cylinder></geometry>
+        <material>
+          <ambient>0.16 0.18 0.22 1</ambient>
+          <diffuse>0.28 0.32 0.38 1</diffuse>
+        </material>
+      </visual>
+    </link>
+    <joint name="servo_1" type="revolute">
+      <parent>base_link</parent>
+      <child>gimbal_yaw_link</child>
+      <pose relative_to="gimbal_yaw_link">0 0 0 0 0 0</pose>
+      <axis>
+        <!-- PX4 NED 顺时针偏航为正 -> 绕 FLU -Z 轴旋转 -->
+        <xyz>0 0 -1</xyz>
+        <limit>
+          <lower>-1.05</lower>
+          <upper>1.05</upper>
+          <effort>2.0</effort>
+          <velocity>6.0</velocity>
+        </limit>
+        <dynamics>
+          <damping>0.04</damping>
+          <friction>0.0</friction>
+        </dynamics>
+      </axis>
+    </joint>
+
+    <link name="gimbal_roll_link">
+      <pose relative_to="gimbal_yaw_link">0 0 -0.018 0 0 0</pose>
+      <inertial>
+        <mass>0.005</mass>
+        <inertia>
+          <ixx>0.000005</ixx><ixy>0</ixy><ixz>0</ixz>
+          <iyy>0.000005</iyy><iyz>0</iyz>
+          <izz>0.000005</izz>
+        </inertia>
+      </inertial>
+      <visual name="gimbal_yoke">
+        <geometry><box><size>0.024 0.048 0.016</size></box></geometry>
+        <material>
+          <ambient>0.20 0.24 0.30 1</ambient>
+          <diffuse>0.34 0.38 0.45 1</diffuse>
+        </material>
+      </visual>
+    </link>
+    <joint name="servo_2" type="revolute">
+      <parent>gimbal_yaw_link</parent>
+      <child>gimbal_roll_link</child>
+      <pose relative_to="gimbal_roll_link">0 0 0 0 0 0</pose>
+      <axis>
+        <!-- PX4 FRD 横滚右侧下沉为正 -> 绕 FLU +X 轴旋转 -->
+        <xyz>1 0 0</xyz>
+        <limit>
+          <lower>-1.05</lower>
+          <upper>1.05</upper>
+          <effort>2.0</effort>
+          <velocity>6.0</velocity>
+        </limit>
+        <dynamics>
+          <damping>0.04</damping>
+          <friction>0.0</friction>
+        </dynamics>
+      </axis>
+    </joint>
+
+    <link name="gimbal_pitch_link">
+      <pose relative_to="gimbal_roll_link">0 0 -0.022 0 0 0</pose>
+      <inertial>
+        <mass>0.005</mass>
+        <inertia>
+          <ixx>0.000005</ixx><ixy>0</ixy><ixz>0</ixz>
+          <iyy>0.000005</iyy><iyz>0</iyz>
+          <izz>0.000005</izz>
+        </inertia>
+      </inertial>
+      <visual name="gimbal_pod_sphere">
+        <geometry><sphere><radius>0.028</radius></sphere></geometry>
+        <material>
+          <ambient>0.12 0.14 0.16 1</ambient>
+          <diffuse>0.20 0.24 0.28 1</diffuse>
+        </material>
+      </visual>
+      <visual name="gimbal_lens_ring">
+        <pose>0.024 0 0 0 1.570796 0</pose>
+        <geometry><cylinder><radius>0.015</radius><length>0.016</length></cylinder></geometry>
+        <material>
+          <ambient>0.06 0.18 0.35 1</ambient>
+          <diffuse>0.12 0.36 0.72 1</diffuse>
+        </material>
+      </visual>
+      <sensor name="gimbal_cam" type="camera">
+        <pose>0.032 0 0 0 0 0</pose>
+        <camera>
+          <horizontal_fov>0.82</horizontal_fov>
+          <image>
+            <width>800</width>
+            <height>450</height>
+            <format>R8G8B8</format>
+          </image>
+          <clip>
+            <near>0.1</near>
+            <far>1500</far>
+          </clip>
+        </camera>
+        <always_on>1</always_on>
+        <update_rate>25</update_rate>
+        <visualize>false</visualize>
+      </sensor>
+    </link>
+    <joint name="servo_0" type="revolute">
+      <parent>gimbal_roll_link</parent>
+      <child>gimbal_pitch_link</child>
+      <pose relative_to="gimbal_pitch_link">0 0 0 0 0 0</pose>
+      <axis>
+        <!-- PX4 FRD 俯仰抬头为正/低头为负 -> 绕 FLU -Y 轴旋转 -->
+        <xyz>0 -1 0</xyz>
+        <limit>
+          <lower>-1.25</lower>
+          <upper>0.65</upper>
+          <effort>2.0</effort>
+          <velocity>6.0</velocity>
+        </limit>
+        <dynamics>
+          <damping>0.04</damping>
+          <friction>0.0</friction>
+        </dynamics>
+      </axis>
+    </joint>
+
+    <plugin filename="gz-sim-joint-position-controller-system" name="gz::sim::systems::JointPositionController">
+      <joint_name>servo_0</joint_name>
+      <sub_topic>servo_0</sub_topic>
+      <p_gain>16.0</p_gain>
+      <d_gain>0.6</d_gain>
+    </plugin>
+    <plugin filename="gz-sim-joint-position-controller-system" name="gz::sim::systems::JointPositionController">
+      <joint_name>servo_1</joint_name>
+      <sub_topic>servo_1</sub_topic>
+      <p_gain>16.0</p_gain>
+      <d_gain>0.6</d_gain>
+    </plugin>
+    <plugin filename="gz-sim-joint-position-controller-system" name="gz::sim::systems::JointPositionController">
+      <joint_name>servo_2</joint_name>
+      <sub_topic>servo_2</sub_topic>
+      <p_gain>16.0</p_gain>
+      <d_gain>0.6</d_gain>
+    </plugin>
+  </model>
+</sdf>

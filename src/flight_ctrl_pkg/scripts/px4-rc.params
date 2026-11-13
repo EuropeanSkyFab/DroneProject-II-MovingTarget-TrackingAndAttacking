@@ -1,0 +1,63 @@
+#!/bin/sh
+# 课题二飞控安全、云台伺服、地理围栏与高机动响应全量参数固化（PX4 v1.15.4）
+# 注：在 PX4 v1.15.4 commander_params.c 中：
+#   COM_OBL_RC_ACT: 3 = Return mode, 4 = Land mode, 5 = Hold mode
+#   必须设为 4 (Land mode) 与 COM_OF_LOSS_T = 0.5，防止 Offboard 断联后在 Gazebo 漂移爬升。
+
+# -------------------- 1. 双层失控保护与硬件地理围栏 --------------------
+param set COM_OBL_RC_ACT 4
+param set COM_OF_LOSS_T 0.5
+param set COM_LOW_BAT_ACT 2
+param set GF_ACTION 2
+param set GF_SOURCE 0
+param set GF_MAX_HOR_DIST 150.0
+param set GF_MAX_VER_DIST 45.0
+param set RTL_RETURN_ALT 15.0
+param set RTL_DESCEND_ALT 5.0
+param set RTL_LAND_DELAY 0.0
+param set MPC_LAND_SPEED 1.2
+param set MPC_LAND_ALT2 3.0
+
+# -------------------- 2. 全链路高机动串级动力学调优 --------------------
+param set MPC_TILTMAX_AIR 55.0
+param set MPC_THR_MAX 0.95
+param set MPC_XY_P 1.6
+param set MPC_Z_P 1.4
+param set MPC_XY_VEL_MAX 14.0
+param set MPC_XY_CRUISE 6.5
+param set MPC_Z_VEL_MAX_UP 5.0
+param set MPC_Z_VEL_MAX_DN 3.5
+param set MPC_ACC_HOR 8.0
+param set MPC_ACC_HOR_MAX 10.5
+param set MPC_JERK_AUTO 18.0
+param set MPC_XY_TRAJ_P 0.85
+param set MPC_XY_VEL_P_ACC 2.2
+param set MPC_XY_VEL_D_ACC 0.25
+param set MC_YAW_P 3.5
+param set MC_YAWRATE_MAX 220.0
+param set MPC_YAWRAUTO_MAX 180.0
+
+# -------------------- 3. PX4 原生三轴稳像云台与 Gazebo 舵机混控 --------------------
+# MNT_MODE_IN=4 (MAVLink Gimbal v2 / VEHICLE_CMD_DO_GIMBAL_MANAGER_PITCHYAW)
+# MNT_MODE_OUT=0 (AUX 混控输出至 GZMixingInterfaceServo)
+# MNT_DO_STAB=1  (利用飞控姿态估计三轴主动稳像)
+# MNT_RANGE_*=114.6 deg (2.0 rad 总行程 -> +/-1.0 rad 与 Gazebo 关节弧度 1:1 对齐)
+param set MNT_MODE_IN 4
+param set MNT_MODE_OUT 0
+param set MNT_DO_STAB 1
+param set MNT_RANGE_PITCH 114.6
+param set MNT_RANGE_YAW 114.6
+param set MNT_RANGE_ROLL 114.6
+param set MNT_LND_P_MIN -45.0
+param set MNT_LND_P_MAX 15.0
+param set SIM_GZ_SV_FUNC1 421
+param set SIM_GZ_SV_FUNC2 422
+param set SIM_GZ_SV_FUNC3 420
+
+# -------------------- 4. 6S 动力电池仿真遥测配置 --------------------
+param set SIM_BAT_ENABLE 1
+param set SIM_BAT_DRAIN 600.0
+param set SIM_BAT_MIN_PCT 15.0
+param set BAT1_N_CELLS 6
+param set BAT1_V_CHARGED 4.20
+param set BAT1_V_EMPTY 3.50

@@ -1,0 +1,36 @@
+# ros_gz_bridge 相机话题映射配置（支持 1~3 架 x500_down_cam 集群）
+- ros_topic_name: "/gz/drone_1/camera/image_raw"
+  gz_topic_name: "/world/moving_target_arena/model/x500_down_cam_0/link/down_cam_link/sensor/down_cam/image"
+  ros_type_name: "sensor_msgs/msg/Image"
+  gz_type_name: "gz.msgs.Image"
+  direction: GZ_TO_ROS
+
+- ros_topic_name: "/gz/drone_1/camera/camera_info"
+  gz_topic_name: "/world/moving_target_arena/model/x500_down_cam_0/link/down_cam_link/sensor/down_cam/camera_info"
+  ros_type_name: "sensor_msgs/msg/CameraInfo"
+  gz_type_name: "gz.msgs.CameraInfo"
+  direction: GZ_TO_ROS
+
+- ros_topic_name: "/gz/drone_2/camera/image_raw"
+  gz_topic_name: "/world/moving_target_arena/model/x500_down_cam_1/link/down_cam_link/sensor/down_cam/image"
+  ros_type_name: "sensor_msgs/msg/Image"
+  gz_type_name: "gz.msgs.Image"
+  direction: GZ_TO_ROS
+
+- ros_topic_name: "/gz/drone_2/camera/camera_info"
+  gz_topic_name: "/world/moving_target_arena/model/x500_down_cam_1/link/down_cam_link/sensor/down_cam/camera_info"
+  ros_type_name: "sensor_msgs/msg/CameraInfo"
+  gz_type_name: "gz.msgs.CameraInfo"
+  direction: GZ_TO_ROS
+
+- ros_topic_name: "/gz/drone_3/camera/image_raw"
+  gz_topic_name: "/world/moving_target_arena/model/x500_down_cam_2/link/down_cam_link/sensor/down_cam/image"
+  ros_type_name: "sensor_msgs/msg/Image"
+  gz_type_name: "gz.msgs.Image"
+  direction: GZ_TO_ROS
+
+- ros_topic_name: "/gz/drone_3/camera/camera_info"
+  gz_topic_name: "/world/moving_target_arena/model/x500_down_cam_2/link/down_cam_link/sensor/down_cam/camera_info"
+  ros_type_name: "sensor_msgs/msg/CameraInfo"
+  gz_type_name: "gz.msgs.CameraInfo"
+  direction: GZ_TO_ROS
