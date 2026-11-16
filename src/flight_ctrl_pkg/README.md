@@ -68,7 +68,8 @@ flight_ctrl_pkg/
 │   └── dynamics_calibrator.launch.py  # 动力学实测标定启动入口
 ├── scripts/
 │   ├── env.sh                         # 环境配置脚本 (自动设置 Humble、PX4 路径与 ROS 2 环境)
-│   ├── px4-rc.params                  # PX4 高机动空战与云台调优参数固化表
+│   ├── px4-rc.mavlink                 # PX4 v1.17+ 启动后置钩子 (在 4001_gz_x500 后覆盖 NAV_DLL_ACT=0 等参数)
+│   ├── px4-rc.params                  # PX4 高机动空战与云台调优参数固化表 (兼容 v1.17.0 / v1.15.4)
 │   └── start_px4_swarm.sh             # 自动化起多机 PX4 SITL + Gazebo + MicroXRCEAgent
 ├── sim/
 │   ├── worlds/
@@ -106,7 +107,7 @@ source ./install/setup.bash
 ```bash
 PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 colcon test --packages-select flight_ctrl_pkg
 colcon test-result --verbose
-# 预期输出: 9 tests, 0 errors, 0 failures, 0 skipped
+# 预期输出: 10 tests, 0 errors, 0 failures, 0 skipped
 ```
 
 ### 3. 单机飞行调试启动
@@ -164,7 +165,24 @@ ros2 launch flight_ctrl_pkg flight_ctrl_swarm.launch.py
 
 ---
 
-## 七、Git 分支与推送说明
+## 七、PX4 版本与跨版本兼容说明 (`v1.17.0` 对齐基准)
+
+本包已完成并验证对 **PX4 `v1.17.0` + `px4_msgs` (`release/1.17`) + `Micro-XRCE-DDS-Agent v2.4.3`** 的全闭环适配，同时对 `v1.15.4` 及对齐的 `main` 保持前后兼容：
+
+1. **动态 DDS 话题版本后缀 (`_vN`) 与消息字段兼容**：
+   - `flight_ctrl_pkg/coord_utils.py` 提供 `versioned_px4_topic()`，在运行期读取各 `px4_msgs.msg` 类的 `MESSAGE_VERSION`（如 `v1.17.0` 中 `VehicleStatus`、`VehicleLocalPosition`、`BatteryStatus` 为 `_v1`，`v1.15.4` 为无后缀），动态拼接 uXRCE-DDS 话题名。
+   - `flight_ctrl_pkg/px4_bridge_node.py` 的电池回调已移除对 `v1.17.0` 已废弃字段 `voltage_filtered_v` / `current_filtered_a` 的强依赖，兼容新旧 `BatteryStatus` 定义。
+2. **Gazebo Harmonic 传感器插件补齐 (`v1.17.0` EKF2 硬性依赖)**：
+   - `sim/worlds/moving_target_arena.sdf` 已补充 `gz::sim::systems::Magnetometer` 系统插件，避免 `PX4 v1.17.0` 出现罗盘缺失导致 EKF2 无法解锁的问题。
+3. **无地面站 (Headless ROS 2) 解锁与参数注入钩子**：
+   - `PX4 v1.17.0` 的 `rcS` 移除了对 `px4-rc.params` 的自动加载，且 `4001_gz_x500` 会在加载默认参数后通过 `param set-default NAV_DLL_ACT 2` 强制触发无 GCS 预检拦截。
+   - `scripts/start_px4_swarm.sh` 结合 `scripts/px4-rc.mavlink` 后置钩子，在不修改 `PX4-Autopilot` 源码的情况下确保 `NAV_DLL_ACT=0` 与全部飞行调优参数生效。
+4. **联调版本对齐提示**：
+   - 确保同一套环境的 `PX4-Autopilot` 与 `px4_msgs` 来自**成对版本**（推荐双方统一锁定 `tag v1.17.0` / `release/1.17`）。若混用相隔数月的 `main` 快照（例如 `PX4-Autopilot` 滞后于 `px4_msgs`），会导致 `VehicleStatus` 等消息版本号（如 `_v4` vs `_v5`）不一致而无法通信；若修改/升级了 `px4_msgs`，请重新执行 `colcon build --packages-select flight_ctrl_pkg`。
+
+---
+
+## 八、Git 分支与推送说明
 
 - **核心代码分支**：`feat/flight-ctrl-pkg`（纯净代码，严格只包含 `src/flight_ctrl_pkg/` 下的文件，可随时向 `main` 发起 Pull Request 合流）。
 - **演示媒体分支**：`archive/flight-ctrl-demos`（存放全套超高清 4K 演示视频及关键帧图集，彻底与核心源码仓库解耦，保护源码主干精简）。

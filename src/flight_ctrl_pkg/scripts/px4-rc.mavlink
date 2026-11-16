@@ -1,0 +1,20 @@
+#!/bin/sh
+# PX4 v1.17+ 兼容性 post-autostart 钩子:
+# rcS 在调用 4001_gz_x500 (其会用 param set-default 覆盖 NAV_DLL_ACT=2) 之后执行 `. px4-rc.mavlink`。
+# 此包装器先执行 PX4 原生 px4-rc.mavlink，再加载 PX4_RC_PARAMS_POST（即 px4-rc.params），
+# 从而在启动阶段无竞态地确保 NAV_DLL_ACT=0 等 ROS 2 离板仿真参数生效。
+
+_px4_orig_mavlink="${R:-}etc/init.d-posix/px4-rc.mavlink"
+if [ ! -f "$_px4_orig_mavlink" ] && [ -n "${PX4_AUTOPILOT_DIR:-}" ]; then
+    _px4_orig_mavlink="$PX4_AUTOPILOT_DIR/build/px4_sitl_default/etc/init.d-posix/px4-rc.mavlink"
+fi
+
+if [ -f "$_px4_orig_mavlink" ]; then
+    # shellcheck disable=SC1090
+    . "$_px4_orig_mavlink"
+fi
+
+if [ -n "${PX4_RC_PARAMS_POST:-}" ] && [ -f "$PX4_RC_PARAMS_POST" ]; then
+    # shellcheck disable=SC1090
+    . "$PX4_RC_PARAMS_POST"
+fi

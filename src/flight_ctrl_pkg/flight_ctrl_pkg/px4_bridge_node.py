@@ -62,6 +62,7 @@ from flight_ctrl_pkg.coord_utils import (
     ned_to_enu_vel,
     quat_frd_ned_to_flu_enu,
     slew_yaw_ned,
+    versioned_px4_topic,
 )
 
 
@@ -160,49 +161,49 @@ class Px4BridgeNode(Node):
         # -------------------- 订阅 PX4 状态与诊断话题 --------------------
         self.create_subscription(
             VehicleLocalPosition,
-            f'{self.px4_prefix}/fmu/out/vehicle_local_position',
+            versioned_px4_topic(self.px4_prefix, '/fmu/out/vehicle_local_position', VehicleLocalPosition),
             self._local_pos_callback,
             px4_qos,
         )
         self.create_subscription(
             VehicleAttitude,
-            f'{self.px4_prefix}/fmu/out/vehicle_attitude',
+            versioned_px4_topic(self.px4_prefix, '/fmu/out/vehicle_attitude', VehicleAttitude),
             self._attitude_callback,
             px4_qos,
         )
         self.create_subscription(
             VehicleOdometry,
-            f'{self.px4_prefix}/fmu/out/vehicle_odometry',
+            versioned_px4_topic(self.px4_prefix, '/fmu/out/vehicle_odometry', VehicleOdometry),
             self._odometry_callback,
             px4_qos,
         )
         self.create_subscription(
             VehicleStatus,
-            f'{self.px4_prefix}/fmu/out/vehicle_status',
+            versioned_px4_topic(self.px4_prefix, '/fmu/out/vehicle_status', VehicleStatus),
             self._status_callback,
             px4_qos,
         )
         self.create_subscription(
             BatteryStatus,
-            f'{self.px4_prefix}/fmu/out/battery_status',
+            versioned_px4_topic(self.px4_prefix, '/fmu/out/battery_status', BatteryStatus),
             self._battery_callback,
             px4_qos,
         )
         self.create_subscription(
             VehicleCommandAck,
-            f'{self.px4_prefix}/fmu/out/vehicle_command_ack',
+            versioned_px4_topic(self.px4_prefix, '/fmu/out/vehicle_command_ack', VehicleCommandAck),
             self._command_ack_callback,
             px4_qos,
         )
         self.create_subscription(
             FailsafeFlags,
-            f'{self.px4_prefix}/fmu/out/failsafe_flags',
+            versioned_px4_topic(self.px4_prefix, '/fmu/out/failsafe_flags', FailsafeFlags),
             self._failsafe_flags_callback,
             px4_qos,
         )
         self.create_subscription(
             EstimatorStatusFlags,
-            f'{self.px4_prefix}/fmu/out/estimator_status_flags',
+            versioned_px4_topic(self.px4_prefix, '/fmu/out/estimator_status_flags', EstimatorStatusFlags),
             self._estimator_flags_callback,
             px4_qos,
         )
@@ -217,13 +218,19 @@ class Px4BridgeNode(Node):
         )
 
         self.offboard_mode_pub = self.create_publisher(
-            OffboardControlMode, f'{self.px4_prefix}/fmu/in/offboard_control_mode', px4_qos
+            OffboardControlMode,
+            versioned_px4_topic(self.px4_prefix, '/fmu/in/offboard_control_mode', OffboardControlMode),
+            px4_qos,
         )
         self.traj_pub = self.create_publisher(
-            TrajectorySetpoint, f'{self.px4_prefix}/fmu/in/trajectory_setpoint', px4_qos
+            TrajectorySetpoint,
+            versioned_px4_topic(self.px4_prefix, '/fmu/in/trajectory_setpoint', TrajectorySetpoint),
+            px4_qos,
         )
         self.cmd_pub = self.create_publisher(
-            VehicleCommand, f'{self.px4_prefix}/fmu/in/vehicle_command', px4_qos
+            VehicleCommand,
+            versioned_px4_topic(self.px4_prefix, '/fmu/in/vehicle_command', VehicleCommand),
+            px4_qos,
         )
 
         # -------------------- 运行时状态 --------------------
@@ -408,8 +415,10 @@ class Px4BridgeNode(Node):
         out = BatteryState()
         out.header.stamp = self.get_clock().now().to_msg()
         out.header.frame_id = f'{self.drone_id}_base_link'
-        out.voltage = float(msg.voltage_filtered_v if msg.voltage_filtered_v > 0.0 else msg.voltage_v)
-        out.current = float(msg.current_filtered_a if msg.current_a >= 0.0 else 0.0)
+        v_filt = float(getattr(msg, 'voltage_filtered_v', 0.0))
+        out.voltage = v_filt if v_filt > 0.0 else float(msg.voltage_v)
+        c_filt = getattr(msg, 'current_filtered_a', msg.current_a)
+        out.current = float(c_filt if msg.current_a >= 0.0 else 0.0)
         out.percentage = float(msg.remaining) if msg.remaining >= 0.0 else 1.0
         out.temperature = float(msg.temperature) if math.isfinite(msg.temperature) else 25.0
         out.power_supply_status = BatteryState.POWER_SUPPLY_STATUS_DISCHARGING

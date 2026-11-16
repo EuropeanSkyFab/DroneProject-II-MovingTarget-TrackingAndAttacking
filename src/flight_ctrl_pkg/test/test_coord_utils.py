@@ -14,6 +14,7 @@ from flight_ctrl_pkg.coord_utils import (
     ned_to_enu_vel,
     quat_frd_ned_to_flu_enu,
     slew_yaw_ned,
+    versioned_px4_topic,
     yaw_enu_to_ned,
     yaw_ned_to_enu,
 )
@@ -195,3 +196,23 @@ def test_accel_ff_yawspeed_and_gimbal_pitch():
     # Gimbal pitch from 10m drone looking at 5.5m aerial target at 5.2m horizontal range -> negative (nose down)
     pitch = compute_gimbal_pitch_ned(10.0, 5.5, 5.2)
     assert math.isclose(pitch, math.degrees(math.atan2(-4.5, 5.2)), abs_tol=1e-4)
+
+
+def test_versioned_px4_topic_and_battery_compat():
+    class _V0:
+        pass
+
+    class _V0Explicit:
+        MESSAGE_VERSION = 0
+
+    class _V1:
+        MESSAGE_VERSION = 1
+
+    class _V5:
+        MESSAGE_VERSION = 5
+
+    assert versioned_px4_topic('', '/fmu/out/vehicle_status', _V0) == '/fmu/out/vehicle_status'
+    assert versioned_px4_topic('', '/fmu/out/vehicle_command', _V0Explicit) == '/fmu/out/vehicle_command'
+    assert versioned_px4_topic('', '/fmu/out/vehicle_local_position', _V1) == '/fmu/out/vehicle_local_position_v1'
+    assert versioned_px4_topic('/px4_1', '/fmu/out/vehicle_status', _V5) == '/px4_1/fmu/out/vehicle_status_v5'
+    assert versioned_px4_topic('px4_2', 'fmu/in/vehicle_command', _V1) == '/px4_2/fmu/in/vehicle_command_v1'
