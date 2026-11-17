@@ -310,3 +310,14 @@ def compute_shadow_ff_accel(
         ae *= sc
     ad = max(-float(max_acc_vert), min(float(max_acc_vert), ad))
     return new_shadow, vel_cmd, (an, ae, ad)
+
+
+def versioned_px4_topic(px4_prefix: str, base_topic: str, msg_cls) -> str:
+    """依据 px4_msgs 消息类的 MESSAGE_VERSION 构造兼容 v1.15/v1.17/main 的 uXRCE-DDS 话题路径。"""
+    ver = int(getattr(msg_cls, 'MESSAGE_VERSION', 0) or 0)
+    suffix = f'_v{ver}' if ver > 0 else ''
+    clean_prefix = str(px4_prefix or '').strip().rstrip('/')
+    if clean_prefix and not clean_prefix.startswith('/'):
+        clean_prefix = '/' + clean_prefix
+    clean_base = '/' + str(base_topic).lstrip('/')
+    return f'{clean_prefix}{clean_base}{suffix}'
