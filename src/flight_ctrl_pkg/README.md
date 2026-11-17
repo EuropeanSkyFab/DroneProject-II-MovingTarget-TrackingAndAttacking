@@ -1,188 +1,94 @@
-# `flight_ctrl_pkg` — 课题二多旋翼/巡飞弹飞控桥接与多机协同支持包
+# `flight_ctrl_pkg` — 课题二多旋翼/巡飞弹飞控桥接与全闭环对抗仿真包
 
-本项目为“课题二：移动目标跟踪与攻击”的独立飞控子系统实现。遵循《课题二内部接口规范 V3.0》与模块化解耦规范，全量源码均独立封装于 `src/flight_ctrl_pkg/` 下，**零侵入、零改动**中枢模块（`center_node_pkg`）与视觉模块（`vision_pkg`）。
-
----
-
-## 一、模块定位与核心特性
-
-1. **50Hz micro-XRCE-DDS 原生闭环桥接**：
-   - 绕过传统 MAVROS/MAVLink 协议栈冗余转换，直连 PX4 固件原生 DDS 话题，通信控制链路端到端时延 $< 10\text{ ms}$。
-2. **三自由度位置 + 速度 + 加速度级联前馈（Shadow-FF）**：
-   - 支持 `OffboardControlMode` 的 `position`、`velocity`、`acceleration` 并发前馈，兼具高速突防灵敏度（实测空速达 **23.6 m/s**）与末端刹车临界阻尼特性（零超调）。
-3. **坐标系严格映射与出生点隔离**：
-   - 负责全局 ENU（东-北-天）与 PX4 局部 NED（北-东-地）的实时高精互转，支持多机出生点平移偏移（`offset_x`, `offset_y`）自动扣除与位姿回填。
-4. **PX4 原生三轴稳像云台协议接管**：
-   - 基于 MAVLink Gimbal Manager v2 协议，全自动处理配置握手，支持前斜下视导航视觉与长焦三轴光电瞄准。
-5. **微秒级低延迟相机中继（Camera Relay）**：
-   - 基于 `gz.transport13` 进程间共享内存机制与底层字节流封装，单帧图像中继时延 $< 0.1\text{ ms}$，支持多路并发高帧率图像发布。
-6. **全方位安全看门狗与状态自检**：
-   - 内置 EKF2 收敛门禁、起飞前离地预流防翻机、心跳超时自动切入 `AUTO_LAND`、触地自动 Disarm 及 6S 真实电池动力学遥测。
+本包提供课题二底层 **50Hz uXRCE-DDS 高机动飞控桥接**、**低延迟机载相机桥接**、**红方三维高机动靶机与雷达模拟器**、**全流程自主战略指挥裁判节点** 以及 **160m 综合战术试飞场（Gazebo Harmonic）**，已完成对 **PX4 `v1.17.0` + `px4_msgs` (`release/1.17`) + `Micro-XRCE-DDS-Agent v2.4.3`** 的全链路实测标定。
 
 ---
 
-## 二、标准接口契约 (Interface Specification)
+## 一、核心模块与特性
 
-飞控模块与中枢（`center_node_pkg`）、视觉（`vision_pkg`）交互遵循下述标准 ROS 2 话题协议：
-
-### 1. 订阅话题（输入接口）
-
-| 话题名称 | 消息类型 | 期望频率 | 接口定义与功能说明 |
-| :--- | :--- | :--- | :--- |
-| `/{drone_id}/fmu/in/trajectory_setpoint` | `geometry_msgs/msg/PoseStamped` | 10 ~ 50 Hz | **期望目标点（全局 ENU）**：输入包含期望三维坐标 `(x, y, z)`，支持空中动态引导与降落（`z < 0.3m` 触发平滑降落）。 |
-| `/{drone_id}/action` | `std_msgs/msg/String` | 10 Hz | **机动模式档位**：支持 `TAKEOFF`、`TRACK`、`INTERCEPT`、`ATTACK`、`RETURN`、`HOVER`、`GROUND`，内部自动匹配对应前馈步长与动力学限幅。 |
-| `/{drone_id}/heartbeat` | `std_msgs/msg/Empty` | 10 Hz | **中枢安全心跳**：飞控看门狗监听心跳，失联超 `heartbeat_timeout`（默认 2.0s）自动触发紧急返航/降落。 |
-| `/{drone_id}/fmu/in/gimbal_setpoint` | `geometry_msgs/msg/Vector3` | 10 Hz | **三轴云台指向期望**：`x` 为俯仰角（rad，向下为负），`y` 为机体系偏航角（rad）。 |
-
-### 2. 发布话题（输出接口）
-
-| 话题名称 | 消息类型 | 发布频率 | 接口定义与功能说明 |
-| :--- | :--- | :--- | :--- |
-| `/{drone_id}/state` | `nav_msgs/msg/Odometry` | 20 Hz | **无人机状态全量发布**：位姿映射至全局 ENU，线速度与角速度映射至机体 FLU 坐标系。 |
-| `/{drone_id}/camera/image_raw` | `sensor_msgs/msg/Image` | 25 Hz | **机载前斜 35° 视觉相机**：`640×480` 彩色 RGB 图像流，供 `vision_pkg` 进行红外/可见光目标检测。 |
-| `/{drone_id}/camera/camera_info` | `sensor_msgs/msg/CameraInfo` | 25 Hz | 机载前斜相机内参矩阵，支持目标像面坐标反投影。 |
-| `/{drone_id}/gimbal_cam/image_raw` | `sensor_msgs/msg/Image` | 25 Hz | **三轴稳像长焦光电吊舱**：`800×450` 窄视场高清画面，供末端精确识别与交战特写。 |
-| `/{drone_id}/gimbal_cam/camera_info` | `sensor_msgs/msg/CameraInfo` | 25 Hz | 长焦光电吊舱相机内参矩阵。 |
-| `/{drone_id}/fmu/out/battery_raw` | `sensor_msgs/msg/BatteryState` | 10 Hz | 真实 6S 动力电池电压、瞬时电流与剩余电量百分比遥测。 |
-| `/{drone_id}/fmu/out/fc_status` | `diagnostic_msgs/msg/DiagnosticStatus` | 10 Hz | 包含 `nav_state`、`arming_state`、`ekf_aligned`、`geofence_breached` 等健康诊断字典。 |
+1. **50Hz micro-XRCE-DDS 原生级联前馈桥接 (`px4_bridge_node.py`)**：
+   - 支持 `OffboardControlMode` 的 `position + velocity + acceleration` 三自由度并发前馈（Shadow-FF），内置防积分饱和拴绳（Anti-Windup Tether）与分模式动态限幅（`TRACK` / `INTERCEPT` / `ATTACK`）。
+   - 针对四旋翼高速机动混控特性，在 `px4-rc.params` 中精细配平推力球水平裕度（`MPC_THR_XY_MARG=0.38`、`MPC_TILTMAX_AIR=36.0°`）与偏航角速率上限（`MC_YAWRATE_MAX=80.0 deg/s`），根除高速急转时对角电机偏航饱和引发的集体升力损失与高度下掉。
+   - 原生集成 MAVLink Gimbal Manager v2 协议，实时接收中枢三维俯仰+偏航角设定点，驱动三轴稳像光电吊舱锁死机动目标。
+2. **零拷贝相机中继与墙钟平滑对齐 (`camera_relay_node.py`)**：
+   - 基于 `gz.transport13` 直连 Gazebo Harmonic 渲染管线，在全系统不启用 `use_sim_time` 的架构下自动完成仿真时间戳到系统墙钟的平滑偏移锁定。
+   - 三机集群模式下默认开启 3 路 `down_cam` 前斜导航视觉流 + 主攻机 `gimbal_cam` 长焦特写流，兼顾多机立体定位精度与仿真器实时率（RTF）。
+3. **仿真时钟同步红方机动靶与雷达模拟器 (`target_sim_node.py`)**：
+   - 实时提取 Gazebo `dynamic_pose/info` 物理仿真时钟驱动三维复合蛇形（`evasive_weave`）、8 字（`figure8`）、盘旋（`circle`）机动轨迹，确保靶机物理速度与角速度不受宿主机实时率波动影响；同步输出 `/sim/target_gt` 真值与带受控高斯噪声的接口 B `/external/target_detected` 雷达引导流。
+4. **全自主战略指挥与结构化可观测性裁判 (`mission_commander_node.py`)**：
+   - 按物理态势事件驱动 `WAIT_READY -> TAKEOFF -> RESUME_PATROL -> TRACK -> INTERCEPT -> ATTACK -> RETURN -> COMPLETE` 全任务闭环，实时统计立体定位占比、三维定位 RMSE、最小防撞间距、末端脱靶量与返航落点精度，并输出 JSON-Lines 追踪日志。
 
 ---
 
-## 三、代码结构与功能清单
+## 二、目录结构
 
 ```text
 flight_ctrl_pkg/
 ├── package.xml
 ├── setup.py
-├── setup.cfg
-├── README.md                           # 飞控完整说明文档
+├── README.md
 ├── flight_ctrl_pkg/
-│   ├── __init__.py
-│   ├── px4_bridge_node.py             # 核心飞控桥接节点 (50Hz DDS 闭环、Shadow-FF、云台、看门狗)
-│   ├── camera_relay_node.py           # 高性能相机图像中继节点 (Gazebo -> ROS 2)
-│   ├── dynamics_calibrator.py         # 动力学参数阶跃自动化标定节点
-│   └── coord_utils.py                 # 坐标转换、偏航率/加速度前馈解算基础数学库
+│   ├── coord_utils.py                 # ENU<->NED 位姿/四元数映射、Shadow-FF 前馈与版本自适应 DDS 话题工具
+│   ├── px4_bridge_node.py             # 50Hz uXRCE-DDS 飞控桥接、云台伺服、6S 电池遥测与心跳看门狗
+│   ├── camera_relay_node.py           # Gazebo Harmonic -> ROS 2 图像/内参转发与时间戳对齐
+│   ├── target_sim_node.py             # 红方三维高机动靶机闭环控制器与外部雷达模拟器 (接口 B)
+│   ├── mission_commander_node.py      # 全流程自主战术指挥官与 JSONL 结构化评测裁判
+│   └── dynamics_calibrator.py         # 阶跃动力学自动化标定工具
 ├── launch/
-│   ├── flight_ctrl_single.launch.py   # 单机调试启动入口
-│   ├── flight_ctrl_swarm.launch.py    # 三机协同启动入口
-│   └── dynamics_calibrator.launch.py  # 动力学实测标定启动入口
+│   ├── flight_ctrl_single.launch.py   # 单机桥接启动入口
+│   ├── flight_ctrl_swarm.launch.py    # 三机集群桥接启动入口（对齐 H1(0,0), H2(0,3), H3(0,6)）
+│   ├── project2_full_swarm.launch.py  # 四包全系统协同总启动入口
+│   └── dynamics_calibrator.launch.py  # 动力学标定启动入口
 ├── scripts/
-│   ├── env.sh                         # 环境配置脚本 (自动设置 Humble、PX4 路径与 ROS 2 环境)
-│   ├── px4-rc.mavlink                 # PX4 v1.17+ 启动后置钩子 (在 4001_gz_x500 后覆盖 NAV_DLL_ACT=0 等参数)
-│   ├── px4-rc.params                  # PX4 高机动空战与云台调优参数固化表 (兼容 v1.17.0 / v1.15.4)
-│   └── start_px4_swarm.sh             # 自动化起多机 PX4 SITL + Gazebo + MicroXRCEAgent
+│   ├── env.sh                         # Conda px4_ros2 / ROS 2 Humble 环境激活与 ROS 1 隔离脚本
+│   ├── px4-rc.params                  # PX4 v1.17.0 安全保护、推力分配与三轴云台固化参数表
+│   ├── px4-rc.mavlink                 # PX4 启动后置钩子
+│   ├── start_px4_swarm.sh             # 一键拉起 MicroXRCEAgent + Gazebo Harmonic + 1/3 架 PX4 SITL
+│   └── run_full_mission.sh            # 一键全自主三机四包闭环追踪打击大联考脚本
 ├── sim/
-│   ├── worlds/
-│   │   └── moving_target_arena.sdf    # 160m 超视距综合战术试飞场
-│   └── models/
-│       ├── x500_down_cam/             # 我方巡飞弹/四旋翼物理模型 (含前斜相机与三轴光电云台)
-│       ├── red_target_uav/            # 敌方红翼对抗靶机模型
-│       └── arena_assets/              # 跑道、停机坪、雷达塔、机库等高清 PBR 材质
+│   ├── worlds/moving_target_arena.sdf # 160m 综合战术试飞场（含磁力计插件与三座标准停机坪）
+│   └── models/                        # x500_down_cam、red_target_uav 与机场设施模型
 └── test/
-    ├── test_coord_utils.py            # 基础数学库单元测试 (覆盖率与断言闭环)
-    └── test_camera_relay.py           # 图像转发功能单测
+    ├── test_coord_utils.py            # 坐标转换、前馈控制律与 DDS 版本后缀单元测试
+    ├── test_camera_relay.py           # 相机时间戳对齐与转发单元测试
+    └── test_target_sim.py             # 靶机三维机动参考轨迹边界单元测试
 ```
 
 ---
 
-## 四、快速编译与运行指引 (Quick Start)
-
-所有指令在 `ros2_ws` 根目录下执行：
-
-### 1. 编译飞控包
+## 三、快速编译、测试与运行
 
 ```bash
-cd ~/flying/ros2_ws
-
-# 加载 ROS 2 环境与工程环境变量
+cd /home/hkw/flying/ros2_ws
 source ./src/flight_ctrl_pkg/scripts/env.sh
 
-# 独立编译 flight_ctrl_pkg
+# 1. 编译与单元测试
 colcon build --packages-select flight_ctrl_pkg
 source ./install/setup.bash
-```
-
-### 2. 自动化单元测试验证
-
-```bash
 PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 colcon test --packages-select flight_ctrl_pkg
 colcon test-result --verbose
-# 预期输出: 10 tests, 0 errors, 0 failures, 0 skipped
-```
+# 预期输出: 11 tests, 0 errors, 0 failures, 0 skipped
 
-### 3. 单机飞行调试启动
-
-```bash
-# 终端 1: 启动 1 架无人机仿真环境与 PX4 (已包含 Gazebo + MicroXRCEAgent)
-./src/flight_ctrl_pkg/scripts/start_px4_swarm.sh 1 1 1
-
-# 终端 2: 启动飞控桥接与双路相机中继节点
-source ./src/flight_ctrl_pkg/scripts/env.sh
-ros2 launch flight_ctrl_pkg flight_ctrl_single.launch.py
-```
-
-### 4. 三机协同集群编队启动
-
-```bash
-# 终端 1: 启动 3 架无人机集群仿真环境与 PX4
-./src/flight_ctrl_pkg/scripts/start_px4_swarm.sh 3 1 1
-
-# 终端 2: 启动三机飞控桥接与相机中继节点
-source ./src/flight_ctrl_pkg/scripts/env.sh
-ros2 launch flight_ctrl_pkg flight_ctrl_swarm.launch.py
+# 2. 一键运行三机四包全自主闭环实弹联考（无头模式）
+./src/flight_ctrl_pkg/scripts/run_full_mission.sh 1
 ```
 
 ---
 
-## 五、机型动力学实测基准 (Benchmark)
+## 四、三机四包 PX4 `v1.17.0` 全闭环实测基准
 
-在标准仿真工况下，通过 `ros2 launch flight_ctrl_pkg dynamics_calibrator.launch.py step_dist:=20.0` 实测得到机型动力学边界如下，供中枢规划算法作为刚性约束调用：
-
-| 动力学指标 | 实测标定值 | 适用控制档位 / 物理说明 |
+| 验收指标 | 实测值 | 说明 |
 | :--- | :--- | :--- |
-| **巡航速度 $V_{\text{cruise}}$** | `4.50 m/s` | `TRACK` / `HOVER` / `RETURN` 稳态档 |
-| **突防峰值速度 $V_{\text{max}}$** | `23.59 m/s` (`84.9 km/h`) | `ATTACK` 档全速冲刺（`MPC_XY_VEL_MAX=26.0`, `MPC_TILTMAX_AIR=48.0°`） |
-| **最大水平加速度 $a_{\text{max}}$** | `10.82 m/s²` | 阶跃差分峰值加速度（`MPC_ACC_HOR_MAX=12.0`） |
-| **偏航转弯角速度 $\dot{\psi}_{\text{max}}$** | `185.2 deg/s` | 偏航指向与前馈跟踪角速度峰值 |
-| **末端最小交汇脱靶量** | **`0.15 m`** | 3v3 三维四面体狼群钳形合围实测 |
-| **集群最小安全间距** | **`2.26 m`** | 全程满足防撞约束（红线 $> 1.2\text{ m}$） |
-| **停机坪触地复位精度** | **$< 0.20 m$** | 返航对准 `H1(0,0)`, `H2(0,3)`, `H3(0,6)` 居中着陆 |
+| **机载立体三维定位占比** | `90.29%` | `158 / 175` 帧为双机/三机射线三角化真三维解算 |
+| **机载视觉全航程定位 RMSE** | `0.6583 m` | 中位数误差 `0.5122 m`，高度 MAE `0.3314 m` |
+| **集群全程最小安全间距** | `2.9009 m` | 全程零碰撞风险（高于 `2.0 m` 安全基线） |
+| **三维机动靶末端打击脱靶量** | `0.5847 m` | 峰值拦截空速 `10.38 m/s`，零高度失速下掉 |
+| **停机坪自主返航落点精度** | `0.159 m / 0.163 m / 0.463 m` | 三机精准降落于 `H1(0,0)`、`H2(0,3)`、`H3(0,6)` 并自动上锁 |
 
 ---
 
-## 六、与中枢 (`center_node_pkg`) 及视觉 (`vision_pkg`) 协同指引
+## 五、PX4 `v1.17.0` 跨版本兼容要点
 
-1. **中枢无缝接入**：
-   - 中枢节点 `center_node` 发布 `/{drone_id}/fmu/in/trajectory_setpoint` 与 `/{drone_id}/action`，飞控模块原生监听并直接转化为动力学指令，中枢**无需任何代码修改**。
-2. **视觉参数对齐说明**：
-   - 视觉包 `vision_pkg` 默认假定垂直朝下相机；当联调本包机载 `35°` 前斜相机与空中红外/色彩靶标时，仅需在启动 `vision_node` 时通过参数重载对齐：
-     ```bash
-     ros2 run vision_pkg vision_node --ros-args \
-       -p camera_mount_rpy:="[0.95993109, 0.0, -1.57079633]" \
-       -p ground_z:=5.8
-     ```
-   - 视觉模块检测到的目标将精准反投影为世界坐标系 ENU 坐标供中枢滤波解算。
-
----
-
-## 七、PX4 版本与跨版本兼容说明 (`v1.17.0` 对齐基准)
-
-本包已完成并验证对 **PX4 `v1.17.0` + `px4_msgs` (`release/1.17`) + `Micro-XRCE-DDS-Agent v2.4.3`** 的全闭环适配，同时对 `v1.15.4` 及对齐的 `main` 保持前后兼容：
-
-1. **动态 DDS 话题版本后缀 (`_vN`) 与消息字段兼容**：
-   - `flight_ctrl_pkg/coord_utils.py` 提供 `versioned_px4_topic()`，在运行期读取各 `px4_msgs.msg` 类的 `MESSAGE_VERSION`（如 `v1.17.0` 中 `VehicleStatus`、`VehicleLocalPosition`、`BatteryStatus` 为 `_v1`，`v1.15.4` 为无后缀），动态拼接 uXRCE-DDS 话题名。
-   - `flight_ctrl_pkg/px4_bridge_node.py` 的电池回调已移除对 `v1.17.0` 已废弃字段 `voltage_filtered_v` / `current_filtered_a` 的强依赖，兼容新旧 `BatteryStatus` 定义。
-2. **Gazebo Harmonic 传感器插件补齐 (`v1.17.0` EKF2 硬性依赖)**：
-   - `sim/worlds/moving_target_arena.sdf` 已补充 `gz::sim::systems::Magnetometer` 系统插件，避免 `PX4 v1.17.0` 出现罗盘缺失导致 EKF2 无法解锁的问题。
-3. **无地面站 (Headless ROS 2) 解锁与参数注入钩子**：
-   - `PX4 v1.17.0` 的 `rcS` 移除了对 `px4-rc.params` 的自动加载，且 `4001_gz_x500` 会在加载默认参数后通过 `param set-default NAV_DLL_ACT 2` 强制触发无 GCS 预检拦截。
-   - `scripts/start_px4_swarm.sh` 结合 `scripts/px4-rc.mavlink` 后置钩子，在不修改 `PX4-Autopilot` 源码的情况下确保 `NAV_DLL_ACT=0` 与全部飞行调优参数生效。
-4. **联调版本对齐提示**：
-   - 确保同一套环境的 `PX4-Autopilot` 与 `px4_msgs` 来自**成对版本**（推荐双方统一锁定 `tag v1.17.0` / `release/1.17`）。若混用相隔数月的 `main` 快照（例如 `PX4-Autopilot` 滞后于 `px4_msgs`），会导致 `VehicleStatus` 等消息版本号（如 `_v4` vs `_v5`）不一致而无法通信；若修改/升级了 `px4_msgs`，请重新执行 `colcon build --packages-select flight_ctrl_pkg`。
-
----
-
-## 八、Git 分支与推送说明
-
-- **核心代码分支**：`feat/flight-ctrl-pkg`（纯净代码，严格只包含 `src/flight_ctrl_pkg/` 下的文件，可随时向 `main` 发起 Pull Request 合流）。
-- **演示媒体分支**：`archive/flight-ctrl-demos`（存放全套超高清 4K 演示视频及关键帧图集，彻底与核心源码仓库解耦，保护源码主干精简）。
+1. **动态 DDS 话题版本后缀 (`_vN`)**：`coord_utils.versioned_px4_topic()` 在运行期自动读取 `px4_msgs.msg` 的 `MESSAGE_VERSION`，无缝兼容 `v1.17.0`（`_v1`）与 `v1.15.4`（无后缀）。
+2. **参数注入兼容**：`start_px4_swarm.sh` 自动将 `px4-rc.params` 解析导出为 `PX4_PARAM_*` 环境变量注入 `PX4 v1.17.0` 的 `rcS`，同时保留 `PX4_RC_PARAMS_POST` 兼容旧版固件。
+3. **版本配对提示**：请确保本地 `PX4-Autopilot` 与 `px4_msgs` 同为 `v1.17.0` / `release/1.17` 成对版本，避免因消息结构体修订号错位导致 DDS 订阅静默失配。

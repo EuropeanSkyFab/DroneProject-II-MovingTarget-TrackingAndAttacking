@@ -85,9 +85,9 @@ class Px4BridgeNode(Node):
         self.declare_parameter('offset_y', 0.0)
         self.declare_parameter('control_hz', 50.0)
         # 保留 max_step_* 为 20Hz 等效参考步长，运行频率变化时自动换算 m/s 上限以保持完全兼容
-        self.declare_parameter('max_step_default', 0.14)
-        self.declare_parameter('max_step_intercept', 0.38)
-        self.declare_parameter('max_step_attack', 0.62)
+        self.declare_parameter('max_step_default', 0.28)
+        self.declare_parameter('max_step_intercept', 0.55)
+        self.declare_parameter('max_step_attack', 0.82)
         self.declare_parameter('heartbeat_timeout', 1.5)
         self.declare_parameter('target_fresh_timeout', 2.0)
         self.declare_parameter('land_d_threshold', -0.25)
@@ -98,7 +98,7 @@ class Px4BridgeNode(Node):
         self.declare_parameter('target_ref_alt', 5.5)
         self.declare_parameter('use_vel_feedforward', True)
         self.declare_parameter('use_acc_feedforward', True)
-        self.declare_parameter('max_yaw_rate_deg', 180.0)
+        self.declare_parameter('max_yaw_rate_deg', 75.0)
 
         p = self.get_parameter
         self.drone_id: str = p('drone_id').value
@@ -305,7 +305,8 @@ class Px4BridgeNode(Node):
                 + (te - self.prev_tgt_ned[1]) ** 2
                 + (td - self.prev_tgt_ned[2]) ** 2
             )
-            if 0.02 <= dt <= 0.5 and jump < 1.8:
+            jump_lim = 2.8 if self.current_action in ('INTERCEPT', 'ATTACK') else 1.8
+            if 0.02 <= dt <= 0.5 and jump < jump_lim:
                 vx = (tn - self.prev_tgt_ned[0]) / dt
                 vy = (te - self.prev_tgt_ned[1]) / dt
                 vz = (td - self.prev_tgt_ned[2]) / dt
@@ -314,12 +315,13 @@ class Px4BridgeNode(Node):
                 nvy = (1.0 - a) * self.tgt_vel_ned[1] + a * vy
                 nvz = (1.0 - a) * self.tgt_vel_ned[2] + a * vz
                 h = math.hypot(nvx, nvy)
-                if h > 5.0:
-                    nvx *= 5.0 / h
-                    nvy *= 5.0 / h
-                nvz = max(-2.5, min(2.5, nvz))
+                v_ff_cap = 13.5 if self.current_action == 'ATTACK' else (10.5 if self.current_action == 'INTERCEPT' else 5.5)
+                if h > v_ff_cap:
+                    nvx *= v_ff_cap / h
+                    nvy *= v_ff_cap / h
+                nvz = max(-3.5, min(3.5, nvz))
                 self.tgt_vel_ned = (nvx, nvy, nvz)
-            elif dt > 0.5 or jump >= 1.8:
+            elif dt > 0.5 or jump >= jump_lim:
                 self.tgt_vel_ned = (0.0, 0.0, 0.0)
         self.prev_tgt_ned = (tn, te, td)
         self.prev_tgt_time = now
@@ -602,9 +604,12 @@ class Px4BridgeNode(Node):
             )
             if gimbal_fresh:
                 yaw_deg = math.degrees(self.gimbal_target_yaw_ned)
-                pitch_deg = compute_gimbal_pitch_ned(
-                    drone_alt, self.target_ref_alt, 5.2, min_pitch_deg=-52.0, max_pitch_deg=10.0
-                )
+                if abs(self.gimbal_target_pitch_rad - (-0.2)) > 1e-4:
+                    pitch_deg = max(-55.0, min(12.0, math.degrees(self.gimbal_target_pitch_rad)))
+                else:
+                    pitch_deg = compute_gimbal_pitch_ned(
+                        drone_alt, self.target_ref_alt, 5.2, min_pitch_deg=-52.0, max_pitch_deg=10.0
+                    )
             elif self.latest_target is not None and self.current_action in ('TRACK', 'INTERCEPT', 'ATTACK'):
                 tgt = self.latest_target.pose.position
                 tn, te, _ = enu_to_ned_pos(tgt.x, tgt.y, tgt.z, self.offset_x, self.offset_y)
@@ -804,16 +809,16 @@ class Px4BridgeNode(Node):
                         and (now - self.last_gimbal_recv_time) < 1.5
                     )
                     target_yaw = self.desired_yaw_ned
-                    if self.current_action == 'TRACK' and gimbal_fresh:
+                    if self.current_action in ('TRACK', 'INTERCEPT', 'ATTACK') and gimbal_fresh:
                         target_yaw = self.gimbal_target_yaw_ned
-                    elif math.hypot(dn, de) > 0.4:
+                    elif math.hypot(dn, de) > 0.6:
                         target_yaw = math.atan2(de, dn)
                     elif gimbal_fresh:
                         target_yaw = self.gimbal_target_yaw_ned
                     yawspeed_cmd = compute_yawspeed_ned(
                         self.desired_yaw_ned,
                         target_yaw,
-                        tau=0.28,
+                        tau=0.42,
                         max_yaw_rate_rad=self.max_yaw_rate_rad,
                     )
                     self.desired_yaw_ned = slew_yaw_ned(
@@ -825,8 +830,8 @@ class Px4BridgeNode(Node):
                 max_speed = self._select_max_speed()
                 max_step_tick = max_speed * self.dt
                 if self.current_action == 'ATTACK':
-                    gain_p, deadband_m, max_tether, vz_up, vz_dn = 3.2, 0.06, 3.8, 4.5, 5.5
-                    max_ah, max_av = 10.0, 5.5
+                    gain_p, deadband_m, max_tether, vz_up, vz_dn = 4.2, 0.02, 3.0, 4.8, 5.0
+                    max_ah, max_av = 11.8, 5.5
                 elif self.current_action == 'INTERCEPT':
                     gain_p, deadband_m, max_tether, vz_up, vz_dn = 1.8, 0.12, 2.4, 3.8, 4.0
                     max_ah, max_av = 8.0, 4.5

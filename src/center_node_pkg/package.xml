@@ -2,19 +2,23 @@
 <?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
   <name>center_node_pkg</name>
-  <version>0.0.0</version>
-  <description>TODO: Package description</description>
-  <maintainer email="europeanskyfab@todo.todo">europeanskyfab</maintainer>
-  <license>TODO: License declaration</license>
+  <version>1.0.0</version>
+  <description>课题二 系统集成与战术调度安全中枢模块</description>
+  <maintainer email="3224896257@qq.com">EuropeanSkyFab</maintainer>
+  <license>Apache-2.0</license>
 
   <depend>rclpy</depend>
   <depend>std_msgs</depend>
   <depend>geometry_msgs</depend>
+  <depend>nav_msgs</depend>
+  <depend>sensor_msgs</depend>
+  <depend>diagnostic_msgs</depend>
   <depend>px4_msgs</depend>
 
   <test_depend>ament_copyright</test_depend>
   <test_depend>ament_flake8</test_depend>
   <test_depend>ament_pep257</test_depend>
+  <test_depend>planning_pkg</test_depend>
   <test_depend>python3-pytest</test_depend>
 
   <export>

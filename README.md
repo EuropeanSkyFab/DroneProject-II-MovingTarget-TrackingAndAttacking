@@ -1,268 +1,152 @@
 # 课题二：面向动态目标的无人机视觉跟踪与自主打击
 
-本项目为课题二系统集成主仓库。系统基于 **ROS 2 (Humble)** 与 **PX4 (uXRCE-DDS)** 构建。
-
-## ⚠️ 核心开发铁律（必读）
-
-1. **绝对不要修改别人的包**：每个人在自己的功能包内写代码，严禁跨包修改。
-2. **绝对不要提交编译产物**：仓库根目录已经配置了 `.gitignore`，`build/`、`install/`、`log/` 以及 `__pycache__/` 不会被提交。**千万不要用 `git add -f` 强制提交这些文件夹。**
-3. **必须遵守接口规范**：所有话题名、消息类型、坐标系必须严格遵守团队内部的《接口文档》。
+本仓库为课题二系统集成与全链路闭环工程主仓库，基于 **ROS 2 Humble**、**PX4 Autopilot (`v1.17.0` / `uXRCE-DDS`)** 与 **Gazebo Harmonic** 构建三机协同立体视觉跟踪、机动轨迹预测与自主拦截打击全套系统。
 
 ---
 
-## 📂 仓库目录结构
+## 一、系统四包协同架构与目录结构
 
-本仓库是一个标准的 ROS 2 工作空间（Workspace），结构如下：
+全系统严格遵循《课题二内部接口规范 V3.0》与《课题二-课题三接口规范》，划分为四大正交 ROS 2 功能包，上层模块统一采用全局 **ENU（东-北-天）** 坐标系，仅由底层飞控桥接层执行 **ENU ↔ NED** 精确变换：
 
 ```text
 ros2_ws/
-├── .gitignore              # Git 忽略规则（已配置好 ROS 2 规则）
-├── README.md               # 本说明文档
-├── 文档                    # 其他细节文档
-|   ├── 进度报告.md
-|   ├── 课题二-课题三-接口规范.md
-|   ├── 课题二内部接口规范.md
-|   └── 内部分工细节.md
-├── mock_nodes/             # 假节点，用于测试自己的数据
-|   ├── launch_control.py       # 测试数据用的GUI界面程序，直接运行这个，可运行launch也可直接运行py节点
-|   ├── mock_mavsdk_bridge_dry.py       # 给没有PX4+Gazebo环境的组员用的，在上面那个GUI界面里手动更改
-|   ├── mock_mavsdk_bridge.py
-|   ├── mock_plan_node.py
-|   ├── mock_vision_node.py
-|   └── fake_camera.py      # 假相机，给视觉用的（做的很糙）
-└── src/                    # 所有源码放这里
-    └── center_node_pkg/    # 【系统集成】中枢节点包
-        ├── center_node_pkg/
-        │   ├── __init__.py
-        │   └── center_node.py  # 中枢主控逻辑
-        ├── package.xml
-        └── setup.py
+├── .gitignore
+├── README.md
+├── 文档/
+│   ├── 内部分工细节.md
+│   ├── 课题二内部接口规范.md
+│   ├── 课题二-课题三-接口规范.md
+│   └── 进度报告.md
+├── mock_nodes/                           # 跨机无仿真干跑节点与可视化联调台
+│   ├── launch_control.py                 # 统一 GUI 联调控制台（支持 ALL 群发与真实规划器切换）
+│   ├── mock_mavsdk_bridge_dry.py         # 纯运动学干跑桥接节点（无需 PX4/Gazebo）
+│   ├── mock_plan_node.py                 # 基础规划模拟节点
+│   ├── mock_vision_node.py               # 基础视觉模拟节点
+│   └── fake_camera.py                    # 合成针孔相机流注入器
+└── src/
+    ├── vision_pkg/                       # 【模块一：机载视觉感知（接口 A 提供方）】
+    │   ├── vision_pkg/
+    │   │   ├── detector.py               # 抗阳光过曝红度增强色块检测 + YOLOv8 可选后端
+    │   │   ├── geo_utils.py              # 35° 前斜外参、机体杆臂补偿、多机异面视线最小二乘立体三角测量
+    │   │   └── vision_node.py            # 35 帧里程计延迟对齐缓存、双/三机真 3D 定位与单目自适应高度回退
+    │   ├── launch/vision_node.launch.py
+    │   └── test/                         # 立体三角化与抗眩光检测单元测试
+    ├── planning_pkg/                     # 【模块二：机动目标估计与协同制导规划（接口 C 提供方）】
+    │   ├── planning_pkg/
+    │   │   ├── estimator.py              # 9 维 Singer-CA + CTRV 曲率卡尔曼滤波、马氏门控与 <=3.0s 丢星外推
+    │   │   ├── guidance.py               # 120° 锁相合围、Apollonius 可达时间求解、钳形截击与 3D APN 末端制导
+    │   │   └── planning_node.py          # 融合接口 A/B，20Hz 输出 /planning/target_pose 与诊断流
+    │   ├── launch/planning_node.launch.py
+    │   └── test/                         # 状态估计器与协同制导律单元测试
+    ├── center_node_pkg/                  # 【模块三：战术调度与三维安全防撞中枢】
+    │   ├── center_node_pkg/
+    │   │   └── center_node.py            # 全状态机调度、ALL 广播、NaN/越界/超时门禁、三维切向+垂直避障、云台指向与真实 6S 遥测
+    │   ├── launch/center_node.launch.py
+    │   └── test/                         # 状态机、防撞、版权/代码规范与跨包混沌故障注入测试
+    └── flight_ctrl_pkg/                  # 【模块四：50Hz uXRCE-DDS 飞控桥接与高动态对抗仿真场】
+        ├── flight_ctrl_pkg/
+        │   ├── px4_bridge_node.py        # 50Hz Pos+Vel+Acc Shadow-FF 桥接、MAVLink v2 三轴云台、心跳看门狗
+        │   ├── camera_relay_node.py      # gz.transport13 零拷贝低延迟相机转发与墙钟时间戳平滑对齐
+        │   ├── target_sim_node.py        # 红方三维高机动逃逸靶机物理控制器（对齐 Gazebo 仿真时钟）与外部雷达（接口 B）
+        │   ├── mission_commander_node.py # 全流程自主战略指挥官与结构化 JSONL 评测裁判节点
+        │   └── coord_utils.py            # ENU<->NED 刚体姿态变换与版本自适应 DDS 话题工具
+        ├── launch/
+        │   ├── flight_ctrl_single.launch.py
+        │   ├── flight_ctrl_swarm.launch.py
+        │   └── project2_full_swarm.launch.py  # 四包全系统一键协同总启动入口
+        ├── scripts/
+        │   ├── env.sh                    # 环境隔离与激活脚本（自动屏蔽宿主 ROS 1 干扰）
+        │   ├── px4-rc.params             # PX4 v1.17.0 高机动推力球分配、防偏航电机饱和与云台参数表
+        │   ├── start_px4_swarm.sh        # 一键启动 MicroXRCEAgent + Gazebo Harmonic + 3x PX4 SITL
+        │   └── run_full_mission.sh       # 单命令全自主实弹追踪打击大联考启动脚本
+        └── sim/                          # 160m 战术试飞场 SDF 世界、H1/H2/H3 停机坪、x500_down_cam 与红方靶机模型
 ```
 
 ---
 
-## 🚀 上手指南
+## 二、快速编译与全量自动化测试
 
-### 第一步：克隆仓库
-打开你的 WSL Ubuntu 终端，进入你想存放代码的目录（比如 `~/`），执行：
 ```bash
-git clone https://github.com/EuropeanSkyFab/DroneProject-II-MovingTarget-TrackingAndAttacking.git ros2_ws
-cd ros2_ws
-```
+cd /home/hkw/flying/ros2_ws
 
-### 第二步：创建自己的功能包
-**严禁所有人都在同一个包里写代码！** 请使用以下命令创建属于你自己的功能包（注意修改 `你的名字` 和 `你的负责模块`）：
-```bash
-cd src
-# 示例：机载视觉模块上传
-ros2 pkg create --build-type ament_python vision_pkg --dependencies rclpy std_msgs geometry_msgs vision_msgs
-# 示例：路径规划模块上传
-ros2 pkg create --build-type ament_python planning_pkg --dependencies rclpy std_msgs geometry_msgs nav_msgs
-```
+# 1. 加载纯净 ROS 2 Humble + px4_msgs 环境
+source ./src/flight_ctrl_pkg/scripts/env.sh
 
-### 第三步：编译工作空间
-每次修改完代码后，必须回到根目录（`ros2_ws`）进行编译：
-```bash
-cd ~/ros2_ws
+# 2. 编译全部四个功能包
 colcon build
-source install/setup.bash
-```
+source ./install/setup.bash
 
-### 第四步：写代码与注册入口
-1. 进入你的包：`src/你的包名/你的包名/`。
-2. 新建你的 `.py` 代码文件。
-3. 打开同级的 `setup.py`，在 `entry_points` 的 `console_scripts` 里注册你的节点：
-```python
-    entry_points={
-        'console_scripts': [
-            'your_node_name = 你的包名.你的代码文件名:main',
-            # 例如
-            # 'center_node = center_node_pkg.center_node:main',    （这是中枢节点的写法）
-        ],
-    },
-```
-
-### 第五步：配置与使用 Launch 文件（一键启动）
-
-在复杂的机器人系统中，我们经常需要同时启动多个节点，或者给节点传入一堆参数。为了让我们的工程更规范、启动更便捷，**所有节点必须配置并在 launch 文件中启动**。
-
-（注：关于 `use_sim_time` 仿真时间对齐的问题，目前鉴于 WSL 环境的底层时钟兼容性 Bug，暂不强制开启。等未来上真机或原生 Ubuntu 环境时再启用，但 launch 框架必须现在搭好。）
-
-**1. 在 setup.py 中注册 launch 文件夹**
-（如果不注册，你的 launch 文件在 `colcon build` 编译时会被忽略）
-打开你包里的 `setup.py`，在 `data_files` 列表中添加你的 launch 文件夹路径：
-```python
-    data_files=[
-        ('share/ament_index/resource_index/packages',
-            ['resource/' + package_name]),
-        ('share/' + package_name, ['package.xml']),
-        # 加上下面这一行（注意把 your_node 替换成你自己的文件名）
-        ('share/' + package_name + '/launch', ['launch/your_node.launch.py']), 
-        #例如：
-        #('share/' + package_name + '/launch', ['launch/center_node.launch.py']),     （这是中枢节点的写法）
-    ],
-```
-
-**2. 编写你的 launch 文件**
-在你的包目录下新建 `launch/your_node.launch.py` 文件，填入以下模板：
-```python
-from launch import LaunchDescription
-from launch_ros.actions import Node
-
-def generate_launch_description():
-    return LaunchDescription([
-        Node(
-            package='你的包名',          # 比如 vision_pkg
-            executable='你的节点名',     # 比如 vision_node
-            name='你的节点名',
-            output='screen',
-            parameters=[
-                # 这里留作以后加参数用（比如强制使用gazebo底层时钟），但是现在先不要加！
-                # {'use_sim_time': True} 
-            ]
-        )
-    ])
-```
-
-**💡 铁律（特别注意！！！）**：
-编译完成后，以后启动你的节点，**严禁**再使用 `ros2 run`。必须统一使用以下命令启动，这样能保证所有人环境和参数的一致性：
-```bash
-ros2 launch 你的包名 your_node.launch.py
-# 例如：
-# ros2 launch center_node_pkg center_node.launch.py    （这是中枢节点的写法）
-```
-
-### 第六步：为所有发送的数据添加时间戳（！！！重要！！！）
-
-在分布式系统中，没有时间戳的数据就是“废数据”。为了防止控制系统追踪过期的目标，中枢节点内置了严格的延迟过滤机制。**如果你发送的消息时间戳为 0，或者延迟过高，你的数据将被中枢直接丢弃！**
-
-**1. 标准消息的时间戳赋值**
-所有带有 `header` 字段的标准消息（如 `geometry_msgs/msg/PoseStamped`、`nav_msgs/msg/Odometry` 等），在通过 `publish` 发送之前，**必须**填入当前的时间戳。
-
-在 Python 中，标准写法如下：
-```python
-msg = PoseStamped()
-# 核心：强制将当前系统时间（或仿真时间）写入消息头
-msg.header.stamp = self.get_clock().now().to_msg()
-msg.header.frame_id = "world" 
-# ... 其他坐标赋值 ...
-self.publisher.publish(msg)
-```
-
-**2. 给 AI 的提示**
-如果你使用 AI 辅助生成代码，请在提示词中明确要求：“在 ROS 2 的发布者节点中，必须在 publish 之前，使用 `self.get_clock().now().to_msg()` 为消息的 `header.stamp` 赋值”。
-
-**⚠️ 警告**：不发时间戳，**等于白写代码**！
-
-**💡 铁律**：以后你启动自己的节点，**严禁**直接使用 `ros2 run`，必须使用 `ros2 launch 你的包名 your_node.launch.py` 启动！否则时间戳不对，联调必定报错！
-
----
-
-## ☁️ Git 提交规范（怎么传代码）
-
-**写完代码后，建议及时把代码推送到云端！**
-
-```bash
-# 1. 确保你在 ros2_ws 根目录下
-cd ~/ros2_ws
-
-# 2. 拉取云端最新代码（防止队友改了代码导致冲突）
-git pull origin main
-
-# 3. 查看你改了哪些文件
-git status
-
-# 4. 添加修改（. 代表添加所有改动，.gitignore 会自动过滤垃圾文件）
-git add .
-
-# 5. 提交并写清楚说明（不要写“update”这种废话）
-git commit -m "feat(视觉): 完成了YOLO目标检测并发布3D坐标"
-
-# 6. 推送到云端
-git push origin main
+# 3. 运行全工作空间单元测试、规范检查与跨包故障注入测试
+PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 colcon test
+colcon test-result --verbose
+# 验收结果: Summary: 22 tests, 0 errors, 0 failures, 0 skipped
 ```
 
 ---
-## 🧪 联调测试
 
-在终端运行任何 ROS 2 节点之前，**请务必确保执行了以下三行**：
+## 三、一键运行三机四包全闭环动态追踪与自主打击任务
+
+### 方式 A：单命令全自动闭环演示与量化评测（推荐）
+自动拉起 `MicroXRCEAgent` + `Gazebo Harmonic` + `3× PX4 v1.17.0 SITL` + 四大功能包全部节点，自动执行 **起飞 (`TAKEOFF`) → 平行巡逻搜索 (`RESUME_PATROL`) → 120° 三机立体视觉合围跟踪 (`TRACK`) → 钳形截击 (`INTERCEPT`) → 末端高速精确打击 (`ATTACK`) → 分层返航精准着陆停机坪 (`RETURN`)**：
+
 ```bash
-source /opt/ros/humble/setup.bash
-source ~/ros2_ws/install/setup.bash
-export ROS_DOMAIN_ID=0  # 保证大家都在同一个局域网
+./src/flight_ctrl_pkg/scripts/run_full_mission.sh 1   # 1=无头高速模式, 0=开启 Gazebo 3D 图形窗口
+```
+任务完成后自动在 `/tmp/project2_mission_summary.json` 输出量化验收指标，并在 `/tmp/project2_mission_trace.jsonl` 生成全链路结构化追踪日志。
+
+### 方式 B：分终端手动控制或接入课题三战略指控 (`/strategy/cmd`)
+
+```bash
+# 终端 1：启动底层三机 PX4 v1.17.0 + Gazebo 仿真集群（出生点对齐 H1(0,0), H2(0,3), H3(0,6)）
+./src/flight_ctrl_pkg/scripts/start_px4_swarm.sh 3 1 1
+
+# 终端 2：一键拉起四包全系统（不启动内置自动指挥官，等待外部 /strategy/cmd 指令）
+source ./src/flight_ctrl_pkg/scripts/env.sh
+source ./install/setup.bash
+ros2 launch flight_ctrl_pkg project2_full_swarm.launch.py auto_mission:=false
+
+# 终端 3：下发战略指令（支持单机 ID 或 "ALL" 集群广播）
+source ./src/flight_ctrl_pkg/scripts/env.sh
+ros2 topic pub --once /strategy/cmd std_msgs/msg/String "{data: '{\"drone_id\": \"ALL\", \"action\": \"TAKEOFF\"}'}"
+ros2 topic pub --once /strategy/cmd std_msgs/msg/String "{data: '{\"drone_id\": \"ALL\", \"action\": \"TRACK\"}'}"
+ros2 topic pub --once /strategy/cmd std_msgs/msg/String "{data: '{\"drone_id\": \"ALL\", \"action\": \"INTERCEPT\"}'}"
+ros2 topic pub --once /strategy/cmd std_msgs/msg/String "{data: '{\"drone_id\": \"drone_1\", \"action\": \"ATTACK\"}'}"
+ros2 topic pub --once /strategy/cmd std_msgs/msg/String "{data: '{\"drone_id\": \"ALL\", \"action\": \"RETURN\"}'}"
 ```
 
-### 🎮 统一测试控制台使用指南
-
-为了降低大家的联调成本，系统集成模块提供了**统一的 GUI 测试台（`launch_control`）**。这个控制台集成了：**插件化动态启停节点、假中控战术指令下发、ENU坐标手动注入、以及各节点的实时日志显示**。
-
-由于大家的环境配置不同，测试台启动命令一致，**但请根据自己电脑是否安装了 PX4 + Gazebo 在界面内选择正确的桥接文件**：
-
-#### 🚀 启动控制台
-在终端（已 source 环境）中执行：
+### 方式 C：无 PX4/Gazebo 轻量化 GUI 联调台
 ```bash
-python3 src/mock_nodes/launch_control.py
+source ./src/flight_ctrl_pkg/scripts/env.sh
+source ./install/setup.bash
+python3 mock_nodes/launch_control.py
 ```
-*(注：如果你没有装 px4 只有纯逻辑需求，无需找另一个文件，只需在打开的界面中进行下述操作即可)*
 
-#### 🛠️ 界面使用步骤
-
-**1. 按环境选择并启动节点**
-- 界面右侧有四个 Slot（槽位），你可以通过**下拉菜单**自由选择该槽位要运行的具体 Python 脚本。
-- **⚠️ 环境避坑（极其重要）**：
-  - **机载视觉、路径规划开发者**：本地**没有** PX4 和 Gazebo 环境，请将 `Slot 1 (桥接)` 手动切换为 **`mock_mavsdk_bridge_dry.py`**（纯数据流，不连飞控）。
-  - **系统集成、飞控桥接开发者**：本地**有** PX4 和 Gazebo，`Slot 1` 保持选择 **`mock_mavsdk_bridge.py`**（通过 MAVSDK 转为真实物理动作）。
-- 选择好后，点击对应槽位的 **“开启”** 按钮拉起进程。
-
-**2. 战术指令与坐标注入**
-- **左侧中控面板**：点击 `TAKEOFF`、`TRACK` 等按钮，模拟课题三下发战术指令。
-- **坐标注入区**：在左侧的“视觉”和“规划”注入框中输入 `X, Y, Z`（ENU坐标系），点击发布。你的数据会直接通过内部话题进入对应的假节点，再转发给中枢。
-
-**3. 中枢的启动**
-- **注意路径**：因为下载下来的整个包在不同的电脑的存放的路径不同，所以请在界面手动切成正确的中枢程序的路径
-- **程序路径**：`ros2_ws/src/center_node_pkg/center_node_pkg/center_node.py`
-
-**3. 实时监控与安全退出**
-- 右侧四个黑色文本框会**实时滚动显示**每个子进程的终端打印日志，方便排查 Bug。
-- 左侧下方会实时刷新无人机的 `X, Y, Z` 位姿。
-- **点击右上角关闭窗口时，所有拉起的子进程会被自动安全清理（强制杀死），绝不会残留幽灵进程占用话题！**
 ---
 
-## ！！避坑警告！！
+## 四、系统实测性能与受控消融基准
 
-### 1：坐标系统一
-- **全系统内部（中枢、视觉、规划）统一使用 ENU 坐标系（东-北-天，Z轴向上为正）。**
-- **严禁在内部模块中写 NED 坐标系转换代码。** 所有的 ENU 到 NED 转换，统一由底层的飞控桥接模块（或 DDS 节点）负责处理。
+### 1. PX4 `v1.17.0` + Gazebo Harmonic 三机四包全闭环实测指标
 
-### 2：深拷贝污染（Python 引用传递）
-由于Python的特性，可变对象变量在赋值给其他变量的时候不会重新指定地址，而是直接把两个变量的指针挂在同一个地址。因此在写 ROS 2 回调函数时，如果要把收到的 `msg` 存到类变量中，**必须使用 `copy.deepcopy(msg)`**，以免后续变量底层回收内存时数据乱码。
-```python
-import copy
+| 评测维度 | 实测指标 | 工程技术支撑 |
+| :--- | :--- | :--- |
+| **立体真三维视觉占比** | **`90.29%`** (`158 / 175` 帧) | 三机异构视角最小二乘视线交会 + `3.4 m` 最小基线与 `11.5°` 视差门控 |
+| **机载视觉全航程 3D 定位误差** | **RMSE `0.6583 m`**（中位数 **`0.5122 m`**，高度 MAE **`0.3314 m`**） | 无需假定靶机固定高度，`65 ms` 渲染延迟里程计环形缓存对齐 |
+| **集群飞行最小安全间距** | **`2.9009 m`**（安全红线 `> 2.0 m`） | 高度分层合围 + 中枢切向绕飞与径向排斥复合防撞势场 |
+| **高机动逃逸靶末端脱靶量** | **`0.5847 m`**（峰值拦截速度 **`10.38 m/s`**） | 9 维 Singer-CTRV 预测 + Apollonius/3D APN 制导 + 防偏航电机饱和推力分配 |
+| **三机自主返航停机坪落点误差** | `H1: 0.159 m`、`H2: 0.163 m`、`H3: 0.463 m` | 分层返航走廊 + 停机坪正上方悬停刹停对准后垂直着陆上锁 |
 
-def callback(self, msg):
-    # 错误做法：直接赋值，底层回收内存会导致数据乱码
-    # self.latest_data = msg 
-    
-    # 正确做法：深拷贝，物理隔离
-    self.latest_data = copy.deepcopy(msg) 
-```
+### 2. 受控消融实验基准（`seed=42`）
 
-### 3：网络隔离
-如果在不同电脑上联调（或者多终端），发现收不到数据，**请检查双方的 `ROS_DOMAIN_ID` 是否一致**（建议统一设置为 `export ROS_DOMAIN_ID=0`）。
+| 子系统实验组 | 基线方法 1 | 基线方法 2 | 本系统方案 | 核心收益 |
+| :--- | :--- | :--- | :--- | :--- |
+| **三维视觉定位误差** ($N=600$) | 单目固定高度面：`2.116 ± 0.080 m` | 双机立体三角化：`0.034 ± 0.001 m` | **三机立体三角化：`0.026 ± 0.001 m`** | 消除靶机高度机动引起的单目投影发散（RMSE 降低 **81.4×**） |
+| **1.4s 视觉遮挡外推误差** ($N=200$) | 零阶保持 (ZOH)：`5.48 ± 0.03 m` | 6 维线性 CV 滤波：`2.28 ± 0.11 m` | **9 维 Singer-CA + CTRV：`1.96 ± 0.11 m`** | 遮挡期间保持机动曲率外推，误差较 ZOH 降低 **64.3%** |
+| **三维机动靶末端脱靶量** ($N=36$) | 纯追踪 (Pure Pursuit)：`0.794 ± 0.104 m` | 线性速度提前量：`0.296 ± 0.048 m` | **Apollonius + 3D APN：`0.172 ± 0.023 m`** | 脱靶量较纯追踪降低 **4.6×** |
 
-### 4：WSL 渲染与高频打印导致定时器降频（系统卡顿）
-*   **现象**：在跑 Gazebo 3D 画面并进行多节点联调时，Gazebo的3D渲染和WSl终端的高频输出会占用大量算力导致CPU满载，进而导致 ROS 2 定时器严重降频。表现为状态机超时判定延迟（如本该 2 秒切回 GUIDANCE，实际等了 5-10 秒才触发）。
-*   **解决方案**：
-    1.  **启动无头模式**：联调时推荐使用 `make px4_sitl gz_x500 HEADLESS=1` 启动 PX4 仿真，关闭 3D 渲染以释放 CPU 算力。
-    2.  **日志节流**：在节点代码中，所有高频触发的日志打印，须加上节流参数，例如：`self.get_logger().info("msg", throttle_duration_sec=1.0)`，防止终端渲染阻塞线程。
-    3.  **频率监控**：用 `ros2 topic hz /fmu/in/trajectory_setpoint` 监控实际发布频率，确认底层数据流是否因 CPU 瓶颈而卡顿。
-
-### 5：中枢/桥接进程崩溃导致无人机无限爬升（致命 Failsafe 缺失）
-*   **现象**：在飞行过程中，如果直接强杀（`Ctrl+C` 或关闭终端）中枢节点或桥接节点，飞控会失去外部指令流。由于 PX4 默认的 Offboard 失控动作为“悬停（Hold）”，在 Gazebo 物理引擎中会因积分漂移导致无人机一直向上爬升直至坠毁。
-*   **解决方案**：
-    1.  **修改飞控底层参数（关键）**：在 QGC 参数设置或 PX4 终端中，将 `COM_OBL_RC_ACT`（Offboard 失控动作）强制设为 **`3 (Land)`**。同时将 `COM_OF_LOSS_T`（失控判定时间）设为 **`0.5`** 秒。
-    2.  **代码持久化**：若在终端用 `param set` 修改，务必执行 `param save` 保存。如果是团队开发，建议负责底层的同学直接将该参数写死在 PX4 源码的 `rcS` 启动脚本中，实现“出厂即保护”。
-    3.  **安全验收**：联调时，务必进行“直接杀进程”的极限测试，验证飞控是否能在 0.5 秒内接管并安全降落。
 ---
 
-*Latest Update：2026-11-10 by EuroepanSkyFab*
+## 五、核心工程纪律与安全保护机制
+
+1. **坐标系隔离契约**：`vision_pkg`、`planning_pkg`、`center_node_pkg` 内部严禁混入 NED 转换，统一采用 `frame_id="world"` 的全局 ENU 坐标系。
+2. **输入防腐门禁**：所有订阅回调执行 `copy.deepcopy`、时间戳保鲜期校验（视觉 `<=0.5s`、规划 `<=0.8s`）及 `NaN`/`Inf`/电子围栏边界过滤。
+3. **双层失控安全保护**：中枢心跳丢失超 `1.5s` 桥接节点自动切入 `AUTO_LAND`；PX4 固件层固化 `COM_OBL_RC_ACT=4 (Land)`、`COM_OF_LOSS_T=0.5s` 与 `NAV_DLL_ACT=0`，杜绝进程异常退出导致飞控漂移爬升。

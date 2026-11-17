@@ -9,14 +9,16 @@ from launch_ros.actions import Node
 
 def generate_launch_description():
     enable_gimbal_cam_relay = LaunchConfiguration('enable_gimbal_cam_relay')
+    gimbal_relay_all_drones = LaunchConfiguration('gimbal_relay_all_drones')
     fleet = [
         {'drone_id': 'drone_1', 'px4_ns': '', 'sys_id': 1, 'ox': 0.0, 'oy': 0.0, 'gz_model': 'x500_down_cam_0'},
-        {'drone_id': 'drone_2', 'px4_ns': 'px4_1', 'sys_id': 2, 'ox': 0.0, 'oy': 2.0, 'gz_model': 'x500_down_cam_1'},
-        {'drone_id': 'drone_3', 'px4_ns': 'px4_2', 'sys_id': 3, 'ox': 0.0, 'oy': 4.0, 'gz_model': 'x500_down_cam_2'},
+        {'drone_id': 'drone_2', 'px4_ns': 'px4_1', 'sys_id': 2, 'ox': 0.0, 'oy': 3.0, 'gz_model': 'x500_down_cam_1'},
+        {'drone_id': 'drone_3', 'px4_ns': 'px4_2', 'sys_id': 3, 'ox': 0.0, 'oy': 6.0, 'gz_model': 'x500_down_cam_2'},
     ]
 
     nodes = [
         DeclareLaunchArgument('enable_gimbal_cam_relay', default_value='false'),
+        DeclareLaunchArgument('gimbal_relay_all_drones', default_value='false'),
     ]
     for cfg in fleet:
         d_id = cfg['drone_id']
@@ -59,13 +61,18 @@ def generate_launch_description():
                 }],
             )
         )
+        gimbal_cond = (
+            IfCondition(enable_gimbal_cam_relay)
+            if d_id == 'drone_1'
+            else IfCondition(gimbal_relay_all_drones)
+        )
         nodes.append(
             Node(
                 package='flight_ctrl_pkg',
                 executable='camera_relay_node',
                 name=f'gimbal_relay_{d_id}',
                 output='screen',
-                condition=IfCondition(enable_gimbal_cam_relay),
+                condition=gimbal_cond,
                 parameters=[{
                     'drone_id': d_id,
                     'source_mode': 'gz_transport',

@@ -20,23 +20,24 @@ param set MPC_LAND_SPEED 1.2
 param set MPC_LAND_ALT2 3.0
 
 # -------------------- 2. 全链路高机动串级动力学调优 --------------------
-param set MPC_TILTMAX_AIR 55.0
-param set MPC_THR_MAX 0.95
+param set MPC_TILTMAX_AIR 36.0
+param set MPC_THR_MAX 1.00
+param set MPC_THR_XY_MARG 0.38
 param set MPC_XY_P 1.6
-param set MPC_Z_P 1.4
-param set MPC_XY_VEL_MAX 14.0
-param set MPC_XY_CRUISE 6.5
+param set MPC_Z_P 1.6
+param set MPC_XY_VEL_MAX 16.0
+param set MPC_XY_CRUISE 7.5
 param set MPC_Z_VEL_MAX_UP 5.0
-param set MPC_Z_VEL_MAX_DN 3.5
+param set MPC_Z_VEL_MAX_DN 4.0
 param set MPC_ACC_HOR 8.0
-param set MPC_ACC_HOR_MAX 10.5
-param set MPC_JERK_AUTO 18.0
+param set MPC_ACC_HOR_MAX 9.5
+param set MPC_JERK_AUTO 16.0
 param set MPC_XY_TRAJ_P 0.85
 param set MPC_XY_VEL_P_ACC 2.2
 param set MPC_XY_VEL_D_ACC 0.25
-param set MC_YAW_P 3.5
-param set MC_YAWRATE_MAX 220.0
-param set MPC_YAWRAUTO_MAX 180.0
+param set MC_YAW_P 1.8
+param set MC_YAWRATE_MAX 80.0
+param set MPC_YAWRAUTO_MAX 75.0
 
 # -------------------- 3. PX4 原生三轴稳像云台与 Gazebo 舵机混控 --------------------
 # MNT_MODE_IN=4 (MAVLink Gimbal v2 / VEHICLE_CMD_DO_GIMBAL_MANAGER_PITCHYAW)

@@ -2,9 +2,9 @@
 <?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
   <name>vision_pkg</name>
-  <version>0.1.0</version>
-  <description>课题二 机载视觉模块：目标检测（YOLO/颜色）+ 2D像素到3D全局ENU坐标反投影，发布 /vision/target_pose</description>
-  <maintainer email="user@todo.todo">vision</maintainer>
+  <version>1.0.0</version>
+  <description>课题二 机载视觉模块：抗强光多后端检测 + 单目反投影与多机三维立体射线三角测量，发布 /vision/target_pose</description>
+  <maintainer email="3224896257@qq.com">EuropeanSkyFab</maintainer>
   <license>Apache-2.0</license>
 
   <depend>rclpy</depend>
@@ -13,6 +13,8 @@
   <depend>nav_msgs</depend>
   <depend>sensor_msgs</depend>
   <depend>cv_bridge</depend>
+
+  <test_depend>python3-pytest</test_depend>
 
   <export>
     <build_type>ament_python</build_type>

@@ -1,103 +1,151 @@
 # -*- coding: utf-8 -*-
 """
-detector.py —— 目标检测后端
+detector.py —— 抗强光多后端机载视觉目标检测器
 
-两个后端，可切换（vision_node 参数 detector_type）：
-  - "color" : ColorBlobDetector，纯 OpenCV HSV 颜色块检测，零模型依赖，开箱即可联调。
-              适合 Gazebo 里放一个纯色（默认红色）靶机的场景。
-  - "yolo"  : YoloDetector，基于 ultralytics，适合真实复杂场景。
-              需要 pip install ultralytics，并通过参数给出模型权重路径。
+支持两种统一接口后端：
+  - "color" : ColorBlobDetector —— HSV 双红区 + 红度色差抑制室外日照镜面反光，支持超视距小目标与近距大目标检测。
+  - "yolo"  : YoloDetector —— 基于 ultralytics YOLOv8，未安装依赖时自动优雅降级。
 
-两个后端统一接口：
-    detect(bgr_image) -> (u, v) 或 None
-        返回图像中置信度最高目标的像素中心坐标；未检测到返回 None。
-    detect_all(bgr_image) -> [(u, v), ...]
-        返回所有目标（多目标扩展预留；当前 vision_node 只用 detect 的单目标结果）。
+完全保持原有接口兼容：
+  - detect(bgr_image) -> (u, v) | None
+  - detect_all(bgr_image) -> [(u, v), ...]
+新增高阶接口：
+  - detect_with_meta(bgr_image) -> (u, v, area_px, bbox_span_px) | None
 """
+
+from __future__ import annotations
+
+from typing import List, Optional, Tuple
 
 import cv2
 import numpy as np
 
 
 class ColorBlobDetector:
-    """HSV 颜色块检测：双区间（兼容红色跨 0° 的特性）+ 形态学去噪 + 最大轮廓质心。"""
+    """HSV 双区间 + 红度优势度滤波色块检测器（抗日照高光白斑误检，兼顾 40m 超视距小靶标）。"""
 
-    def __init__(self,
-                 hsv_lower1=(0, 120, 70), hsv_upper1=(10, 255, 255),
-                 hsv_lower2=(170, 120, 70), hsv_upper2=(180, 255, 255),
-                 min_area=200):
+    def __init__(
+        self,
+        hsv_lower1: Tuple[int, int, int] = (0, 110, 55),
+        hsv_upper1: Tuple[int, int, int] = (12, 255, 255),
+        hsv_lower2: Tuple[int, int, int] = (168, 110, 55),
+        hsv_upper2: Tuple[int, int, int] = (180, 255, 255),
+        min_area: float = 24.0,
+        enable_glare_suppression: bool = True,
+    ) -> None:
         self.lower1 = np.array(hsv_lower1, dtype=np.uint8)
         self.upper1 = np.array(hsv_upper1, dtype=np.uint8)
         self.lower2 = np.array(hsv_lower2, dtype=np.uint8)
         self.upper2 = np.array(hsv_upper2, dtype=np.uint8)
-        self.min_area = min_area
-        self._kernel = np.ones((5, 5), np.uint8)
+        self.min_area = float(min_area)
+        self.enable_glare_suppression = bool(enable_glare_suppression)
+        self._kernel_small = np.ones((3, 3), np.uint8)
+        self._kernel_close = np.ones((5, 5), np.uint8)
 
-    def detect_all(self, bgr_image):
-        """返回所有面积超过 min_area 的色块质心列表（多目标预留）。"""
+    def _extract_candidates(self, bgr_image: np.ndarray) -> List[Tuple[float, float, float, float]]:
+        """返回 [(u, v, area, bbox_max_span), ...]，按面积降序排列。"""
+        if bgr_image is None or bgr_image.size == 0:
+            return []
+
         hsv = cv2.cvtColor(bgr_image, cv2.COLOR_BGR2HSV)
         mask = cv2.inRange(hsv, self.lower1, self.upper1)
         mask |= cv2.inRange(hsv, self.lower2, self.upper2)
-        mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, self._kernel)
-        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, self._kernel)
+
+        if self.enable_glare_suppression:
+            # 室外强光抑制：要求红色通道显著高于绿/蓝通道 (R - max(G, B) >= 35)，排除暖白阳光反射面
+            b_ch, g_ch, r_ch = cv2.split(bgr_image)
+            gb_max = np.maximum(g_ch, b_ch)
+            red_excess = cv2.subtract(r_ch, gb_max)
+            _, chroma_mask = cv2.threshold(red_excess, 35, 255, cv2.THRESH_BINARY)
+            mask = cv2.bitwise_and(mask, chroma_mask)
+
+        # 使用 3x3 轻量化开运算保留远距小目标 (>=24 px^2)，再用 5x5 闭运算连通机翼分离区域
+        if self.min_area >= 120.0:
+            mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, self._kernel_close)
+        else:
+            mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, self._kernel_small)
+        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, self._kernel_close)
 
         contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        results = []
+        results: List[Tuple[float, float, float, float]] = []
         for c in contours:
-            if cv2.contourArea(c) < self.min_area:
+            area = float(cv2.contourArea(c))
+            if area < self.min_area:
                 continue
             m = cv2.moments(c)
             if abs(m["m00"]) < 1e-9:
                 continue
-            results.append((m["m10"] / m["m00"], m["m01"] / m["m00"], cv2.contourArea(c)))
-        # 按面积从大到小排序，返回 (u, v)
-        results.sort(key=lambda r: r[2], reverse=True)
-        return [(u, v) for u, v, _ in results]
+            u = float(m["m10"] / m["m00"])
+            v = float(m["m01"] / m["m00"])
+            _, _, bw, bh = cv2.boundingRect(c)
+            span = float(max(bw, bh))
+            results.append((u, v, area, span))
 
-    def detect(self, bgr_image):
-        """返回最大色块的质心（当前单目标业务用）。"""
-        all_hits = self.detect_all(bgr_image)
-        return all_hits[0] if all_hits else None
+        results.sort(key=lambda r: r[2], reverse=True)
+        return results
+
+    def detect_all(self, bgr_image: np.ndarray) -> List[Tuple[float, float]]:
+        """返回所有面积超过 min_area 的色块质心列表。"""
+        return [(u, v) for u, v, _, _ in self._extract_candidates(bgr_image)]
+
+    def detect(self, bgr_image: np.ndarray) -> Optional[Tuple[float, float]]:
+        """返回最大色块的质心 (u, v)。"""
+        cands = self._extract_candidates(bgr_image)
+        return (cands[0][0], cands[0][1]) if cands else None
+
+    def detect_with_meta(self, bgr_image: np.ndarray) -> Optional[Tuple[float, float, float, float]]:
+        """返回最大色块的 (u, v, area_px, bbox_span_px)。"""
+        cands = self._extract_candidates(bgr_image)
+        return cands[0] if cands else None
 
 
 class YoloDetector:
-    """YOLOv8 检测：取置信度最高且类别匹配的目标框中心。未安装 ultralytics 时优雅降级。"""
+    """YOLOv8 检测后端：未安装 ultralytics 时优雅降级。"""
 
-    def __init__(self, model_path="yolov8n.pt", conf_thres=0.4, target_class=-1):
-        self.conf_thres = conf_thres
-        self.target_class = target_class  # -1 表示不限类别
+    def __init__(self, model_path: str = "yolov8n.pt", conf_thres: float = 0.4, target_class: int = -1) -> None:
+        self.conf_thres = float(conf_thres)
+        self.target_class = int(target_class)
         self._model = None
         try:
             from ultralytics import YOLO
             self._model = YOLO(model_path)
         except Exception:
-            # 交给节点层打日志提示，此处保持静默降级
             self._model = None
 
     @property
-    def available(self):
+    def available(self) -> bool:
         return self._model is not None
 
-    def detect_all(self, bgr_image):
-        """返回所有通过置信度/类别筛选的目标框中心，按置信度降序（多目标预留）。"""
-        if self._model is None:
+    def _extract_hits(self, bgr_image: np.ndarray) -> List[Tuple[float, float, float, float, float]]:
+        if self._model is None or bgr_image is None or bgr_image.size == 0:
             return []
         results = self._model.predict(bgr_image, verbose=False, conf=self.conf_thres)
         if not results or results[0].boxes is None or len(results[0].boxes) == 0:
             return []
         boxes = results[0].boxes
-        hits = []
+        hits: List[Tuple[float, float, float, float, float]] = []
         for i in range(len(boxes)):
             cls_id = int(boxes.cls[i].item())
             if self.target_class >= 0 and cls_id != self.target_class:
                 continue
             conf = float(boxes.conf[i].item())
             x1, y1, x2, y2 = boxes.xyxy[i].tolist()
-            hits.append(((x1 + x2) / 2.0, (y1 + y2) / 2.0, conf))
+            bw = max(1.0, float(x2 - x1))
+            bh = max(1.0, float(y2 - y1))
+            hits.append(((x1 + x2) / 2.0, (y1 + y2) / 2.0, conf, bw * bh, max(bw, bh)))
         hits.sort(key=lambda h: h[2], reverse=True)
-        return [(u, v) for u, v, _ in hits]
+        return hits
 
-    def detect(self, bgr_image):
-        """返回置信度最高的目标框中心（当前单目标业务用）。"""
-        all_hits = self.detect_all(bgr_image)
-        return all_hits[0] if all_hits else None
+    def detect_all(self, bgr_image: np.ndarray) -> List[Tuple[float, float]]:
+        return [(u, v) for u, v, _, _, _ in self._extract_hits(bgr_image)]
+
+    def detect(self, bgr_image: np.ndarray) -> Optional[Tuple[float, float]]:
+        hits = self._extract_hits(bgr_image)
+        return (hits[0][0], hits[0][1]) if hits else None
+
+    def detect_with_meta(self, bgr_image: np.ndarray) -> Optional[Tuple[float, float, float, float]]:
+        hits = self._extract_hits(bgr_image)
+        if not hits:
+            return None
+        u, v, _, area, span = hits[0]
+        return u, v, area, span

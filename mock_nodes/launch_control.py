@@ -117,8 +117,8 @@ class GroundStationGUI:
         target_frame.pack(pady=5)
         tk.Label(target_frame, text="当前控制目标:", fg="#a9a9a9", bg="#2b2b2b", font=("WenQuanYi Micro Hei", 10)).pack(side="left")
         
-        self.target_drone_var = tk.StringVar(value="drone_1")
-        target_menu = tk.OptionMenu(target_frame, self.target_drone_var, "drone_1", "drone_2", "drone_3")
+        self.target_drone_var = tk.StringVar(value="ALL")
+        target_menu = tk.OptionMenu(target_frame, self.target_drone_var, "ALL", "drone_1", "drone_2", "drone_3")
         target_menu.config(bg="#4a4a4a", fg="white", width=10, relief="flat", highlightthickness=0)
         target_menu.pack(side="left", padx=5)
 
@@ -133,6 +133,7 @@ class GroundStationGUI:
         self.create_btn(btn_frame, "TRACK", 1, 1, btn_conf)
         self.create_btn(btn_frame, "INTERCEPT", 2, 0, btn_conf)
         self.create_btn(btn_frame, "ATTACK", 2, 1, {**btn_conf, "bg": "#8b0000", "activebackground": "#b22222"})
+        self.create_btn(btn_frame, "RESUME_PATROL", 3, 0, btn_conf)
 
         # (视觉/规划注入区，你自己保留之前的代码即可)
                 # ★ 将注入区插在按钮区和指令输出终端之间
@@ -210,13 +211,14 @@ class GroundStationGUI:
         right_frame.grid_columnconfigure(1, weight=1, uniform="col")
         right_frame.grid_columnconfigure(2, weight=1, uniform="col")
 
+        ws_root = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
         monitors = [
             {"id": "bridge_1", "title": "1号桥接", "default": "mock_mavsdk_bridge.py", "row": 0, "col": 0},
             {"id": "bridge_2", "title": "2号桥接", "default": "mock_mavsdk_bridge.py", "row": 0, "col": 1},
             {"id": "bridge_3", "title": "3号桥接", "default": "mock_mavsdk_bridge.py", "row": 0, "col": 2},
-            {"id": "vision",   "title": "视觉模块", "default": "/home/europeanskyfab/ros2_ws/src/vision_pkg/launch/vision_node.launch.py", "row": 1, "col": 0},
-            {"id": "planning", "title": "规划模块", "default": "mock_plan_node.py", "row": 1, "col": 1},
-            {"id": "center",   "title": "中枢模块", "default": "/home/europeanskyfab/ros2_ws/src/center_node_pkg/launch/center_node.launch.py", "row": 1, "col": 2},
+            {"id": "vision",   "title": "视觉模块", "default": os.path.join(ws_root, "src/vision_pkg/launch/vision_node.launch.py"), "row": 1, "col": 0},
+            {"id": "planning", "title": "规划模块", "default": os.path.join(ws_root, "src/planning_pkg/launch/planning_node.launch.py"), "row": 1, "col": 1},
+            {"id": "center",   "title": "中枢模块", "default": os.path.join(ws_root, "src/center_node_pkg/launch/center_node.launch.py"), "row": 1, "col": 2},
         ]
 
         self.monitor_vars = {}

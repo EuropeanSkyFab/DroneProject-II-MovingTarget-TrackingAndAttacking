@@ -101,7 +101,7 @@ if [ "$WITH_CAMERA" = "1" ]; then
     MODEL_RES_NAME="x500_down_cam"
 fi
 
-POSES=("0,0,0.5,0,0,0" "0,2,0.5,0,0,0" "0,4,0.5,0,0,0")
+POSES=("0,0,0.5,0,0,0" "0,3,0.5,0,0,0" "0,6,0.5,0,0,0")
 
 echo "[3/4] 启动 ${NUM_DRONES} 架 PX4 SITL (${SIM_MODEL})..."
 mkdir -p /tmp/px4_sitl_instances

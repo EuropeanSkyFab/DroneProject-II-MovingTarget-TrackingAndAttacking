@@ -11,7 +11,7 @@ setup(
     data_files=[
         ('share/ament_index/resource_index/packages',
             ['resource/' + package_name]),
-        ('share/' + package_name, ['package.xml']),
+        ('share/' + package_name, ['package.xml', 'README.md']),
         (os.path.join('share', package_name, 'launch'),
             glob(os.path.join('launch', '*.launch.py'))),
         (os.path.join('share', package_name, 'sim', 'worlds'),
@@ -28,7 +28,8 @@ setup(
             glob(os.path.join('sim', 'models', 'arena_assets', 'materials', 'textures', '*.png'))),
         (os.path.join('share', package_name, 'scripts'),
             glob(os.path.join('scripts', '*.sh'))
-            + glob(os.path.join('scripts', '*.params'))),
+            + glob(os.path.join('scripts', '*.params'))
+            + glob(os.path.join('scripts', 'px4-rc.*'))),
     ],
     install_requires=['setuptools'],
     zip_safe=True,
@@ -46,6 +47,8 @@ setup(
             'px4_bridge_node = flight_ctrl_pkg.px4_bridge_node:main',
             'camera_relay_node = flight_ctrl_pkg.camera_relay_node:main',
             'dynamics_calibrator = flight_ctrl_pkg.dynamics_calibrator:main',
+            'target_sim_node = flight_ctrl_pkg.target_sim_node:main',
+            'mission_commander_node = flight_ctrl_pkg.mission_commander_node:main',
         ],
     },
 )
