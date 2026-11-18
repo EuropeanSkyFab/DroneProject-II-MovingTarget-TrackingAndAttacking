@@ -27,6 +27,10 @@ DEFERRED_ACTIONS = ("RESUME_PATROL",)
 
 ALL_ACTIONS = CENTER_ACTIONS + PLAN_ACTIONS + DEFERRED_ACTIONS
 
+# P3 降级级别。P2 直接调用 plan() 时结果固定为 NORMAL；
+# P3 的 wrapper 才会填 EXTRAPOLATING / HOLDING / NO_PLAN。
+DEGRADE_LEVELS = ("NORMAL", "EXTRAPOLATING", "HOLDING", "NO_PLAN")
+
 
 @dataclass(frozen=True)
 class PlanResult:
@@ -47,6 +51,16 @@ class PlanResult:
         t_go: 预计拦截时间，单位秒；TRACK 或尾随点为 ``None``。
         reason: 机器可读的原因，例如 ``"target_too_old"``。
         clipped: 点是否被安全边界裁剪过。
+        level: P3 降级级别（``DEGRADE_LEVELS`` 之一）；P2 直接调用时为 NORMAL。
+        anomaly: P3 异常分类，例如 ``"STALE"``、``"INVALID"``、``"EGO_LOST"``；
+            ``None`` 表示本帧没有异常。它是给日志和降级策略表用的，
+            不改变 P2 的动作语义。
+        guard_notes: 安全护栏的裁剪记录，例如 ``"z_clamped:1.000->5.000"``；
+            保持为元组，保证结果不可变、可安全跨线程传递。
+        output_stamp: 护栏确认后的发布时刻；P3 不生成 ROS 时间，
+            只是把 ``now`` 和上一帧 stamp 比较后给出单调递增的值。
+        recovered_from: 本帧仍处于恢复期时，记录从哪个降级级别恢复。
+        recovery_frames: 恢复期已经过的帧数；非恢复期为 ``None``。
     """
 
     action: str
@@ -56,6 +70,12 @@ class PlanResult:
     t_go: Optional[float]
     reason: str
     clipped: bool = False
+    level: str = "NORMAL"
+    anomaly: Optional[str] = None
+    guard_notes: tuple[str, ...] = ()
+    output_stamp: Optional[float] = None
+    recovered_from: Optional[str] = None
+    recovery_frames: Optional[int] = None
 
     @property
     def should_publish(self) -> bool:

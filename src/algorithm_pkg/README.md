@@ -5,14 +5,23 @@
 ## 组成
 
 - `algorithm_pkg/algorithm_core.py`：P1 目标预测、拦截求解、安全约束；不依赖 ROS。
-- `algorithm_pkg/plan_types.py`：P2 `PlanResult` 和动作分组。
-- `algorithm_pkg/plan_params.py`：P2 `PlanParams`，按动作选择速度。
+- `algorithm_pkg/plan_types.py`：P2 `PlanResult` 和动作分组；P3 在其上增加降级字段。
+- `algorithm_pkg/plan_params.py`：P2 `PlanParams`，按动作选择速度；P3 参数也集中在这里。
 - `algorithm_pkg/plan_policy.py`：P2 `plan()`，决定一帧发不发点。
+- `algorithm_pkg/validators.py`：P3 异常检测（目标/己方/指令分类）。
+- `algorithm_pkg/degrade_fsm.py`：P3 四级降级状态机与滞回/恢复。
+- `algorithm_pkg/degrade_policy.py`：P3 `plan_with_degrade()`，按级别发点。
+- `algorithm_pkg/safety_guard.py`：P3 输出护栏（边界/跳变/最小距离/stamp）。
 - `algorithm_pkg/algorithm_node.py`：ROS 适配层；调用 P2 的 `plan()`，只负责消息、参数、日志和发布。
 - `launch/algorithm.launch.py`：三机默认参数的一键启动。
 - `test/test_algorithm_core.py`：P1 纯算法单测。
 - `test/test_plan_*.py`：P2 参数、策略、模式切换测试。
+- `test/test_validators.py`、`test/test_degrade_*.py`、`test/test_safety_guard.py`、
+  `test/test_recovery.py`、`test/test_replay_anomaly.py`：P3 异常降级测试。
+- `test/simulate_p3.py`：三个复杂场景的时间推进仿真；支持 `--scenario/--tick/--csv` 单帧调试。
 - `文档/P2模式策略契约.md`：P2 的 7 动作表和边界说明。
+- `文档/P3降级策略.md`：P3 的 L0/L1/L2/L3 策略表、护栏顺序与待确认参数。
+- `文档/P3调试方法.md`：单函数、单帧、场景、系统四层调试方法与图表读法。
 
 ## 编译与测试（Humble 容器内）
 
@@ -39,6 +48,23 @@ ros2 launch algorithm_pkg algorithm.launch.py
 P2 在每帧发点前还会做一次 0.5 秒的预测年龄门限（`max_pred_age`）；
 超过门限的旧目标不会继续被用来算拦截点。`ATTACK` 无解或目标失效时，
 适配层会发布“当前位置保持点”，避免中枢继续使用上一帧攻击点。
+
+## P3 异常降级（纯算法层）
+
+P3 在 P2 外面再包一层，仍然不 import rclpy、不新增 ROS 逻辑：
+
+- `plan_with_degrade()` 按 L0/L1/L2/L3 输出：正常、CV 外推、保持、no_plan；
+- 目标短暂丢失（`age <= t_extrap_max`）用外推继续追；超过上限改发保持点；
+  己方断流、目标 NaN/越界或指令非法才进 L3；
+- 所有输出再走 `apply_safety_guard()`：NaN、XY/高度边界、目标点跳变、
+  与目标最小距离、时间戳单调；
+- 时间戳倒退帧只丢弃，不改变降级级别；
+- 参数全部在 `PlanParams`，默认值待联调确认；策略表和 8 个待确认接口
+  问题见 `文档/P3降级策略.md`。
+
+P3 不改变 P2 的七动作语义，也不改中枢；`algorithm_node.py` 的接线放在 P4。
+当前 P1+P2+P3 共 162 项 pytest（`PYTHONPATH=src/algorithm_pkg
+/usr/bin/python3 -m pytest -q src/algorithm_pkg/test`）。
 
 ## 接口
 

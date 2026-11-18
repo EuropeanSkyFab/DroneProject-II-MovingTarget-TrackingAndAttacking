@@ -83,6 +83,38 @@ def test_custom_params_are_kept(measured):
     )
 
 
+def test_p3_defaults_are_documented_initial_values(measured):
+    """场景：P3 参数先用一套可跑、可解释的初值，联调后再标定。
+
+    操作：构造 PlanParams()，读取 P3 字段。
+    输入：默认参数。
+    预期：t_extrap_max=1.0、n_enter=2、n_exit=1、n_recover=3、
+          max_step_recover=0.2、n_recover_step=5、频率检测关闭、
+          hold_point_source=last_valid、ego_timeout=1.0。
+    """
+    params = PlanParams()
+
+    assert params.t_extrap_max == pytest.approx(1.0)
+    assert params.n_enter == 2
+    assert params.n_exit == 1
+    assert params.n_recover == 3
+    assert params.max_step_recover == pytest.approx(0.2)
+    assert params.n_recover_step == 5
+    assert params.freq_anomaly_enabled is False
+    assert params.freq_anomaly_threshold == pytest.approx(0.5)
+    assert params.freq_window_size == 20
+    assert params.hold_point_source == "last_valid"
+    assert params.ego_timeout == pytest.approx(1.0)
+    assert params.target_min_alt == pytest.approx(0.0)
+
+    measured(
+        f"t_extrap_max={params.t_extrap_max:.1f}s, n_enter={params.n_enter}, "
+        f"n_exit={params.n_exit}, n_recover={params.n_recover}, "
+        f"max_step_recover={params.max_step_recover:.2f}, "
+        f"freq_enabled={params.freq_anomaly_enabled}"
+    )
+
+
 def test_max_step_none_means_no_limit(measured):
     """场景：默认不限制单帧位移，交给飞控自己的步长限制。
 
@@ -110,6 +142,18 @@ def test_max_step_none_means_no_limit(measured):
         {"max_pred_age": 0.0},
         {"max_step": 0.0},
         {"max_alt": 4.0},
+        {"t_extrap_max": 0.0},
+        {"n_enter": 0},
+        {"n_exit": 0},
+        {"n_recover": 0},
+        {"n_recover_step": 0},
+        {"max_step_recover": 0.0},
+        {"freq_anomaly_threshold": 1.5},
+        {"freq_window_size": 1},
+        {"hold_point_source": "somewhere"},
+        {"ego_timeout": 0.0},
+        {"target_min_alt": -1.0},
+        {"target_min_alt": 60.0},
     ],
 )
 def test_invalid_params_raise_value_error(kwargs, measured):
