@@ -6,7 +6,7 @@
     PYTHONPATH=src/algorithm_pkg /usr/bin/python3 -m pytest -q \
         src/algorithm_pkg/test
 
-成功时终端末尾会输出“P1 实测结果”，列出每个测试实际测出的值。
+成功时终端末尾会输出“算法实测结果”，按“场景 / 预期 / 实测”列出每个测试。
 
 测试分三组：
 1. 目标预测：速度估计、过期、异常数据
