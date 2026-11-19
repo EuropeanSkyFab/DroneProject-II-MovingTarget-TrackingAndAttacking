@@ -32,7 +32,9 @@ class CenterNode(Node):
             self.drone_modes[drone_id] = "GROUND"
         
         # 外部发布
-        self.fleet_state_pubs = {}  # 给中控发送每架无人机发送态势信息
+        # 注意：位姿态势（/{drone_id}/state）由飞控桥接直接发布，中枢不再转发。
+        # 原转发会把中枢自己订阅到的同一条 Odometry 又发回同一话题（自我回环），
+        # 导致 last_state_time 被自己的消息刷新、链路监控永远 GOOD。见 README 避坑 6。
         self.battery_pubs = {}  # 给中控发送每架无人机发送电池信息
         self.link_status_pubs = {} # 给中控发送每架无人机发送链路状态信息
         
@@ -97,14 +99,9 @@ class CenterNode(Node):
                 10
                 )
 
-        # 8. 发布给课题三的态势信息 (中枢作为安全代理，转发或聚合)
+        # 8. 发布给课题三的态势信息（位姿态势不再由中枢转发）
+        #    课题三直接订阅桥接发布的 /{drone_id}/state，中枢只上报派生的链路健康度与电量。
         for drone_id in self.swarm_config:
-            # 发布此时无人机的位姿状态
-            self.fleet_state_pubs[drone_id] = self.create_publisher(
-                Odometry, 
-                f'/{drone_id}/state', 
-                10
-                )
             # 发布此时无人机的电池状态
             self.battery_pubs[drone_id] = self.create_publisher(
                 BatteryState, 
@@ -289,8 +286,10 @@ class CenterNode(Node):
                         if abs(other_vz) < 0.5:
                             # 战术拉升：直接往上拉高 3 米
                             target.pose.position.z += 3.0
-                            # 限高，防止飞出安全边界
-                            target.pose.position.z = min(target.pose.position.z, 25.0)
+                            # 限高：必须跟随 MAX_ALT，不能写死 25。
+                            # 写死 25 时，若当前目标 z 已高于 25（MAX_ALT=50），
+                            # 这里会把高度"砍"到 25，等于让飞机向下扎，与拉升意图相反。
+                            target.pose.position.z = min(target.pose.position.z, self.MAX_ALT)
                             self.get_logger().warn(f"{drone_id} 对方平飞，战术拉升躲避！", throttle_duration_sec=1.0)
                             continue
                         
@@ -399,6 +398,17 @@ class CenterNode(Node):
             data = json.loads(msg.data)
             new_drone_id = data.get("drone_id", "drone_1")
             action = data.get("action", "HOVER")
+
+            # ★ 动作白名单：接口规范要求 action 必须是全大写枚举值。
+            #   不加校验时，拼错的动作（如 "trakc"）会被直接写进 drone_modes，
+            #   而 timer_callback 里没有对应分支，该机会静默停发指令并悬停。
+            VALID_ACTIONS = {"TAKEOFF", "HOVER", "RETURN", "TRACK",
+                             "INTERCEPT", "ATTACK", "RESUME_PATROL"}
+            if action not in VALID_ACTIONS:
+                self.get_logger().warn(
+                    f"拒绝执行：{new_drone_id} 收到未知动作 {action!r}，"
+                    f"合法值为 {sorted(VALID_ACTIONS)}")
+                return
             
             # 1. 安全拦截：校验无人机 ID 是否存在
             if new_drone_id not in self.swarm_config:
@@ -418,6 +428,15 @@ class CenterNode(Node):
                     self.get_logger().warn(f"拒绝执行 TAKEOFF：{new_drone_id} 已在空中，请勿重复起飞！")
                     return
             
+            # 3.5 RESUME_PATROL 为预留态：目前没有任何状态机分支与桥接档位对应它。
+            #     若直接写入 drone_modes，该机会一帧指令都不发，桥接看门狗 2 秒后介入悬停。
+            #     因此这里保持原态并告警，等后续实现了再放开。
+            if action == "RESUME_PATROL":
+                self.get_logger().warn(
+                    f"{new_drone_id} 收到 RESUME_PATROL（预留态，暂无实现），"
+                    f"保持当前状态 {current_drone_mode}。")
+                return
+
             # 4. 通过安检，更新该无人机的专属状态
             self.drone_modes[new_drone_id] = action
             
@@ -454,6 +473,14 @@ class CenterNode(Node):
         for d_id in self.swarm_config:
             if time.time() - self.last_plan_times[d_id] > 2.0:
                 self.latest_plan_targets[d_id] = None
+
+        # 3. 己方位姿保鲜（多机专属，分机独立结算）
+        #    桥接断流后必须清掉僵尸位姿，否则状态机会拿过期坐标继续算目标点并发指令。
+        #    清空后 my_state 为 None，对应分支不再下发；且 last_state_time 停止刷新，
+        #    下面的链路监控才能真正报出 WEAK / LOST。
+        for d_id in self.swarm_config:
+            if time.time() - getattr(self, f'last_state_time_{d_id}', 0.0) > 2.0:
+                self.drone_states[d_id] = None
         
 # ========================= 单层扁平化状态机分发（多机并发版） ===========================
         for drone_id in self.swarm_config:
@@ -644,29 +671,37 @@ class CenterNode(Node):
                     
                     self.send_single_target(drone_id, target)
                 
-        # =================【转发给课题三的态势数据】=================
+        # =================【上报给课题三的链路健康度】=================
+        # 位姿由飞控桥接直接发布 /{drone_id}/state，中枢不再转发（原转发会自我回环）。
+        # 链路状态无条件发布：即使从未收到位姿，课题三也应看到 LOST，而不是冻结在旧值。
+        # 契约要求（《课题二-课题三-接口规范》第四节）：values 必须含 delay_ms 与 rssi 两个键。
+        # 当前链路是 DDS，没有真实射频 RSSI 可读，故 rssi 按契约允许的「模拟值」给出，
+        # 与 level 的阈值同源，保证单调；将来接入真实 RadioStatus 时替换 rssi 的来源即可。
         for drone_id in self.swarm_config:
-            my_state = self.drone_states.get(drone_id)
-            if my_state is not None:
-                self.fleet_state_pubs[drone_id].publish(my_state)
-                
-                status = DiagnosticStatus()
-                status.hardware_id = drone_id
-                delay = time.time() - getattr(self, f'last_state_time_{drone_id}', 0.0)
-                
-                if delay < 0.2:
-                    status.level = DiagnosticStatus.OK
-                    status.name = "Link Status: GOOD"
-                elif delay < 0.8:
-                    status.level = DiagnosticStatus.WARN
-                    status.name = "Link Status: WEAK"
-                else:
-                    status.level = DiagnosticStatus.ERROR
-                    status.name = "Link Status: LOST"
-                    
-                kv_delay = KeyValue(key="delay_ms", value=str(round(delay * 1000, 1)))
-                status.values = [kv_delay]
-                self.link_status_pubs[drone_id].publish(status)
+            status = DiagnosticStatus()
+            status.hardware_id = drone_id
+            delay = time.time() - getattr(self, f'last_state_time_{drone_id}', 0.0)
+
+            if delay < 0.2:
+                status.level = DiagnosticStatus.OK
+                status.name = "Link Status: GOOD"
+                status.message = "All systems nominal"
+                rssi = -55
+            elif delay < 0.8:
+                status.level = DiagnosticStatus.WARN
+                status.name = "Link Status: WEAK"
+                status.message = "Link degraded"
+                rssi = -72
+            else:
+                status.level = DiagnosticStatus.ERROR
+                status.name = "Link Status: LOST"
+                status.message = "Link lost"
+                rssi = -95
+
+            kv_delay = KeyValue(key="delay_ms", value=str(round(delay * 1000, 1)))
+            kv_rssi = KeyValue(key="rssi", value=str(rssi))
+            status.values = [kv_delay, kv_rssi]
+            self.link_status_pubs[drone_id].publish(status)
                 
         # 降频转发：电量数据
         if time.time() - getattr(self, 'last_battery_time', 0.0) > 2.0:
