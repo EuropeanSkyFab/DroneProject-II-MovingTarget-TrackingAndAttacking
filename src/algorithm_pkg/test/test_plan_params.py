@@ -5,6 +5,8 @@
         src/algorithm_pkg/test
 """
 
+import math
+
 import pytest
 
 from algorithm_pkg.plan_params import PlanParams
@@ -154,6 +156,16 @@ def test_max_step_none_means_no_limit(measured):
         {"ego_timeout": 0.0},
         {"target_min_alt": -1.0},
         {"target_min_alt": 60.0},
+        {"v_max": math.nan},
+        {"t_go_max": math.inf},
+        {"min_alt": math.nan},
+        {"max_xy": math.inf},
+        {"max_pred_age": math.nan},
+        {"t_extrap_max": math.inf},
+        {"max_step_recover": math.inf},
+        {"freq_anomaly_threshold": math.nan},
+        {"n_enter": 2.5},
+        {"freq_window_size": 3.5},
     ],
 )
 def test_invalid_params_raise_value_error(kwargs, measured):

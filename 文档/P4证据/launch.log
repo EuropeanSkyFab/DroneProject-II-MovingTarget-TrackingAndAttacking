@@ -1,0 +1,6 @@
+[INFO] [launch]: All log files can be found below /tmp/.ros/log/2026-11-18-12-52-34-650424-venom-silensky-87
+[INFO] [launch]: Default logging verbosity is set to INFO
+[INFO] [algorithm_node-1]: process started with pid [89]
+[algorithm_node-1] [INFO] [1795006354.836537491] [algorithm_node]: algorithm_node 已启动：drone_ids=['drone_1', 'drone_2', 'drone_3'], max_step=0.62, rate=20.0Hz
+/algorithm_node
+Double value is: 0.62

@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import json
 import os
 import tempfile
 from collections import deque
@@ -35,10 +36,20 @@ os.environ.setdefault(
     "MPLCONFIGDIR", str(Path(tempfile.gettempdir()) / "p3-mpl-config")
 )
 
-import matplotlib  # noqa: E402
 
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt  # noqa: E402
+def _pyplot():
+    """延迟导入 matplotlib 的 Agg 后端。
+
+    pytest 的场景用例只读数字、不画图；把 matplotlib 放在函数里，
+    测试环境没有 GUI/绘图库时也能跑，导入提速。
+    """
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    return plt
+
 
 from algorithm_pkg.algorithm_core import (  # noqa: E402
     TargetSample,
@@ -349,16 +360,28 @@ def simulate(
 
 
 def summarize(name: str, records: list[TickRecord]) -> dict:
-    """统计级别、发布点、跳变、最小距离和异常原因。"""
+    """统计级别、发布点、跳变、最小距离和异常原因。
+
+    跳变分三个口径，避免把适配层补的保持点混进“P3 算法跳变”：
+
+    - ``p3_jump``：``PlanResult.point``，纯 P3 输出；
+    - ``plan_jump``：``plan_point``，含适配层 ATTACK 保持点，即准备发布点；
+    - ``published_jump``：``published``，中枢实际指令（TRACK 会叠加视觉/环绕）。
+
+    为兼容旧脚本保留 ``max_jump=plan_jump`` 和 ``command_jump=published_jump``。
+    """
     levels: dict[str, int] = {}
     reasons: dict[str, int] = {}
+    p3_count = 0
     plan_count = 0
     published_count = 0
-    max_jump = 0.0
-    command_jump = 0.0
-    plan_vs_command = 0.0
-    last_point: Optional[Vec3] = None
-    last_command: Optional[Vec3] = None
+    p3_jump = 0.0
+    plan_jump = 0.0
+    published_jump = 0.0
+    plan_vs_published = 0.0
+    last_p3: Optional[Vec3] = None
+    last_plan: Optional[Vec3] = None
+    last_published: Optional[Vec3] = None
     min_distance = float("inf")
     retained_ticks = 0
     retained_distance = 0.0
@@ -371,19 +394,27 @@ def summarize(name: str, records: list[TickRecord]) -> dict:
         reasons[record.result.reason] = (
             reasons.get(record.result.reason, 0) + 1
         )
+        if record.result.point is not None:
+            p3_count += 1
+            if last_p3 is not None:
+                p3_jump = max(
+                    p3_jump, _distance(last_p3, record.result.point)
+                )
+            last_p3 = record.result.point
         if record.plan_point is not None:
             plan_count += 1
-            point = record.plan_point
-            if last_point is not None:
-                max_jump = max(max_jump, _distance(last_point, point))
-            last_point = point
+            if last_plan is not None:
+                plan_jump = max(
+                    plan_jump, _distance(last_plan, record.plan_point)
+                )
+            last_plan = record.plan_point
         if record.published is not None:
             published_count += 1
-            if last_command is not None:
-                command_jump = max(
-                    command_jump, _distance(last_command, record.published)
+            if last_published is not None:
+                published_jump = max(
+                    published_jump, _distance(last_published, record.published)
                 )
-            last_command = record.published
+            last_published = record.published
             if record.result.reason == "fallback_tail":
                 tail_points += 1
         if (
@@ -392,8 +423,8 @@ def summarize(name: str, records: list[TickRecord]) -> dict:
             and record.command_source.startswith("vision")
         ):
             vision_override_ticks += 1
-            plan_vs_command = max(
-                plan_vs_command,
+            plan_vs_published = max(
+                plan_vs_published,
                 _distance(record.plan_point, record.published),
             )
         if record.target_true is not None:
@@ -412,11 +443,17 @@ def summarize(name: str, records: list[TickRecord]) -> dict:
         "name": name,
         "levels": levels,
         "reasons": reasons,
+        "p3_count": p3_count,
         "plan_count": plan_count,
         "published": published_count,
-        "max_jump": max_jump,
-        "command_jump": command_jump,
-        "plan_vs_command": plan_vs_command,
+        "p3_jump": p3_jump,
+        "plan_jump": plan_jump,
+        "published_jump": published_jump,
+        # 兼容旧脚本/文档的字段名。
+        "max_jump": plan_jump,
+        "command_jump": published_jump,
+        "plan_vs_published": plan_vs_published,
+        "plan_vs_command": plan_vs_published,
         "vision_override_ticks": vision_override_ticks,
         "min_distance": min_distance,
         "retained_ticks": retained_ticks,
@@ -447,6 +484,84 @@ def check_common(records: list[TickRecord]) -> list[str]:
             issues.append(f"t={record.t:.2f}: NO_PLAN 却仍生成新 P3 点")
             break
     return issues
+
+
+def check_scenario(
+    scenario: dict,
+    records: list[TickRecord],
+    summary: dict,
+    *,
+    tuned: bool = True,
+) -> list[str]:
+    """按场景返回未满足的预期项；空列表表示通过。
+
+    ``tuned=False``（``max_step=None``）时跳过跳变断言，只保留场景语义
+    与中枢保留时长检查，用于 ``--params default`` 的观察输出。
+    """
+    failures = list(check_common(records))
+    if not records:
+        failures.append("没有记录")
+        return failures
+
+    if tuned:
+        max_step = scenario["max_step"]
+        if summary["p3_jump"] > max_step + 1e-6:
+            failures.append(
+                f"P3 输出点跳变 {summary['p3_jump']:.3f}m > "
+                f"max_step {max_step:.2f}m"
+            )
+        if summary["plan_jump"] > max_step + 1e-6:
+            failures.append(
+                f"准备发布点跳变 {summary['plan_jump']:.3f}m > "
+                f"max_step {max_step:.2f}m"
+            )
+        # 标定后 ATTACK 的保留盲飞应接近 0；default 模式只观察，不判。
+        if (
+            scenario["name"] == "C"
+            and summary["retained_distance"] > 1.0
+        ):
+            failures.append(
+                "C: 标定后保留期间盲飞 "
+                f"{summary['retained_distance']:.2f}m > 1.0m"
+            )
+    if summary["retained_ticks"] * DT > CENTER_RETENTION + DT + 1e-6:
+        failures.append(
+            f"中枢保留 {summary['retained_ticks'] * DT:.2f}s > "
+            f"{CENTER_RETENTION:.1f}s"
+        )
+
+    final_level = records[-1].result.level
+    name = scenario["name"]
+    if name == "A":
+        if "EXTRAPOLATING" not in summary["levels"]:
+            failures.append("A: 目标遮挡后没有进入 L1 外推")
+        if "NO_PLAN" in summary["levels"]:
+            failures.append("A: 不应出现 L3")
+        if final_level != "NORMAL":
+            failures.append(f"A: 最终未回 NORMAL（{final_level}）")
+        if summary["vision_override_ticks"] == 0:
+            failures.append("A: 中枢没有采用视觉目标（TRACK 视觉优先）")
+        if summary["retained_ticks"] == 0:
+            failures.append("A: 没有出现中枢保留旧指令")
+    elif name == "B":
+        if summary["tail_points"] == 0:
+            failures.append("B: INTERCEPT 追不上时应发尾随点")
+        if "HOLDING" not in summary["levels"]:
+            failures.append("B: 目标丢失 1.5s 应进入 L2 保持")
+        if "NO_PLAN" in summary["levels"]:
+            failures.append("B: 不应出现 L3")
+        if final_level != "NORMAL":
+            failures.append(f"B: 最终未回 NORMAL（{final_level}）")
+    elif name == "C":
+        if summary["tail_points"] != 0:
+            failures.append("C: ATTACK 不允许尾随")
+        if "NO_PLAN" not in summary["levels"]:
+            failures.append("C: 己方断流应进入 L3")
+        if summary["retained_ticks"] == 0:
+            failures.append("C: L3 期间中枢应保留旧指令")
+        if final_level != "NORMAL":
+            failures.append(f"C: 最终未回 NORMAL（{final_level}）")
+    return failures
 
 
 def transitions(records: list[TickRecord]) -> list[str]:
@@ -514,6 +629,7 @@ def plot_scene(
     out_path: Path,
 ) -> None:
     """画 XY 轨迹 + 距离/级别时间线。"""
+    plt = _pyplot()
     figure, (ax_path, ax_time) = plt.subplots(
         1, 2, figsize=(12.0, 4.8), gridspec_kw={"width_ratios": [1.15, 1.0]}
     )
@@ -975,6 +1091,12 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
         help="把选中场景的每帧记录写到 CSV",
     )
     parser.add_argument(
+        "--json",
+        type=Path,
+        default=None,
+        help="把场景摘要、判定与迁移写成 JSON（供 CI/下游消费）",
+    )
+    parser.add_argument(
         "--params",
         choices=("tuned", "default"),
         default="tuned",
@@ -993,8 +1115,12 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-def main(argv: Optional[Sequence[str]] = None) -> None:
-    """跑选中场景，打印摘要/迁移/单帧详情，按需导出 CSV 和轨迹图。"""
+def main(argv: Optional[Sequence[str]] = None) -> int:
+    """跑选中场景，打印摘要/迁移/单帧详情，按需导出 CSV、JSON 和轨迹图。
+
+    Returns:
+        0：所有选中场景判定通过；1：存在 FAIL。
+    """
     args = parse_args(argv)
     scenarios = build_scenarios()
     if args.list:
@@ -1003,7 +1129,7 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
                 f"{scenario['name']}: {scenario['title']} "
                 f"({scenario['action']}, {scenario['duration']:.1f}s)"
             )
-        return
+        return 0
 
     selected = scenarios
     if args.scenario.lower() != "all":
@@ -1022,6 +1148,11 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
 
     all_ok = True
     output_records: list[tuple[str, list[TickRecord]]] = []
+    payload: dict[str, object] = {
+        "params": args.params,
+        "ok": True,
+        "scenarios": [],
+    }
     for scenario in selected:
         # 先按节点默认 max_step=None 跑一遍，看看“护栏关闭”时的指令跳变。
         default_params = PlanParams(
@@ -1059,7 +1190,6 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
             default_records if args.params == "default" else tuned_records
         )
         summary = summarize(scenario["name"], records)
-        issues = check_common(records)
         active_label = (
             "默认 max_step=None"
             if args.params == "default"
@@ -1074,18 +1204,22 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
         )
         print(
             f"级别分布={summary['levels']}, "
-            f"P3 点={summary['plan_count']} 帧, "
+            f"准备发布点={summary['plan_count']} 帧, "
             f"中枢实际指令={summary['published']} 帧, "
             f"最小目标距离={summary['min_distance']:.2f}m"
         )
         print(
-            f"P3 点最大跳变：默认 max_step=None -> "
-            f"{default_summary['max_jump']:.3f}m；"
+            f"P3 输出点最大跳变（纯算法）：默认 max_step=None -> "
+            f"{default_summary['p3_jump']:.3f}m；"
             f"标定 max_step={scenario['max_step']:.2f}m -> "
-            f"{tuned_summary['max_jump']:.3f}m"
+            f"{tuned_summary['p3_jump']:.3f}m"
         )
         print(
-            f"中枢实际指令点最大跳变={summary['command_jump']:.3f}m"
+            f"准备发布点最大跳变（含适配层保持点）="
+            f"{summary['plan_jump']:.3f}m"
+        )
+        print(
+            f"中枢实际指令点最大跳变={summary['published_jump']:.3f}m"
             "（TRACK 场景会叠加 5m 环绕，且发生在 P3 护栏之后）"
         )
         print(
@@ -1104,65 +1238,32 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
                 "（中枢 TRACK 优先视觉，P3 的 TRACK 点被覆盖）"
             )
 
-        if args.params == "default":
-            jump_ok = True
-            print("护栏判定：默认 max_step=None，不判跳变（仅观察）")
-        else:
-            jump_ok = (
-                summary["max_jump"] <= scenario["max_step"] + 1e-6
-            )
-            print(
-                "护栏判定：标定后 P3 点跳变 <= max_step -> "
-                + ("PASS" if jump_ok else "FAIL")
-            )
-        all_ok = all_ok and jump_ok
         print("级别迁移：")
         for event in transitions(records):
             print("  " + event)
 
-        if issues:
-            all_ok = False
-            print("硬检查：FAIL")
-            for issue in issues:
-                print("  - " + issue)
+        failures = check_scenario(
+            scenario, records, summary, tuned=args.params != "default"
+        )
+        scenario_ok = not failures
+        all_ok = all_ok and scenario_ok
+        if scenario_ok:
+            print("场景判定：PASS（硬检查 + 跳变 + 场景语义）")
         else:
-            print("硬检查：OK（无 NaN/Inf、无越界、NO_PLAN 不发布新点）")
+            print("场景判定：FAIL")
+            for failure in failures:
+                print("  - " + failure)
 
-        # 场景专属判定。
-        if scenario["name"] == "A":
-            ok = (
-                "EXTRAPOLATING" in summary["levels"]
-                and "NO_PLAN" not in summary["levels"]
-                and records[-1].result.level == "NORMAL"
-            )
-            print(
-                "判定 A：L1 外推出现、无 L3、最终回 NORMAL -> "
-                + ("PASS" if ok else "FAIL")
-            )
-            all_ok = all_ok and ok
-        elif scenario["name"] == "B":
-            ok = (
-                summary["tail_points"] > 0
-                and "HOLDING" in summary["levels"]
-                and "NO_PLAN" not in summary["levels"]
-                and records[-1].result.level == "NORMAL"
-            )
-            print(
-                "判定 B：INTERCEPT 允许尾随、进 L2、无 L3、最终回 NORMAL -> "
-                + ("PASS" if ok else "FAIL")
-            )
-            all_ok = all_ok and ok
-        else:
-            no_tail = summary["tail_points"] == 0
-            has_l3 = "NO_PLAN" in summary["levels"]
-            retained = summary["retained_ticks"] > 0
-            recovered = records[-1].result.level == "NORMAL"
-            ok = no_tail and has_l3 and retained and recovered
-            print(
-                "判定 C：ATTACK 无尾随、出现 L3、L3 期间沿用中枢保留指令、"
-                "最终回 NORMAL -> " + ("PASS" if ok else "FAIL")
-            )
-            all_ok = all_ok and ok
+        payload["scenarios"].append(
+            {
+                "name": scenario["name"],
+                "action": scenario["action"],
+                "ok": scenario_ok,
+                "failures": failures,
+                "summary": summary,
+                "transitions": transitions(records),
+            }
+        )
 
         if scenario["action"] == "TRACK":
             print(
@@ -1208,6 +1309,16 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
     print("=" * 78)
     print("总判定：" + ("全部 PASS" if all_ok else "存在 FAIL"))
 
+    payload["ok"] = all_ok
+    if args.json is not None:
+        args.json.parent.mkdir(parents=True, exist_ok=True)
+        args.json.write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        print(f"JSON：{args.json}")
+    return 0 if all_ok else 1
+
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

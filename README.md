@@ -18,11 +18,15 @@
 ros2_ws/
 ├── .gitignore              # Git 忽略规则（已配置好 ROS 2 规则）
 ├── README.md               # 本说明文档
-├── 文档                    # 其他细节文档
-|   ├── 进度报告.md
-|   ├── 课题二-课题三-接口规范.md
+├── 文档                    # 设计、接口、联调与交付文档
+|   ├── 算法原理与策略.md
+|   ├── P2模式策略契约.md
+|   ├── P3降级策略.md
+|   ├── P3调试方法.md
+|   ├── P4联调记录.md
 |   ├── 课题二内部接口规范.md
-|   └── 内部分工细节.md
+|   ├── 课题二-课题三-接口规范.md
+|   └── Jazzy开发与Humble交付指南.md
 ├── mock_nodes/             # 假节点，用于测试自己的数据
 |   ├── launch_control.py       # 测试数据用的GUI界面程序，直接运行这个，可运行launch也可直接运行py节点
 |   ├── mock_mavsdk_bridge_dry.py       # 给没有PX4+Gazebo环境的组员用的，在上面那个GUI界面里手动更改
@@ -31,12 +35,12 @@ ros2_ws/
 |   ├── mock_vision_node.py
 |   └── fake_camera.py      # 假相机，给视觉用的（做的很糙）
 └── src/                    # 所有源码放这里
-    └── center_node_pkg/    # 【系统集成】中枢节点包
-        ├── center_node_pkg/
-        │   ├── __init__.py
-        │   └── center_node.py  # 中枢主控逻辑
-        ├── package.xml
-        └── setup.py
+    ├── center_node_pkg/    # 【系统集成】中枢节点包
+    │   ├── center_node_pkg/center_node.py  # 中枢主控逻辑
+    │   ├── package.xml
+    │   └── setup.py
+    ├── algorithm_pkg/      # 【规划】P1~P4 算法与 ROS 适配（见其 README）
+    └── vision_pkg/         # 【视觉】目标检测与定位
 ```
 
 ---
@@ -191,6 +195,13 @@ source /opt/ros/humble/setup.bash
 source ~/ros2_ws/install/setup.bash
 export ROS_DOMAIN_ID=0  # 保证大家都在同一个局域网
 ```
+
+### 🛰️ 规划节点（algorithm_pkg）P4 联调
+
+P4 起规划节点已接 P3 降级：每架飞机一个 `DegradeFSM`，`no_plan` 不发点，
+`max_step` 默认 0.62。分层架构、每个文件的作用、职责边界见
+[src/algorithm_pkg/README.md](src/algorithm_pkg/README.md)；启动命令、单机闭环、
+失效注入、三机隔离、参数标定见 [文档/P4联调记录.md](文档/P4联调记录.md)。
 
 ### 🎮 统一测试控制台使用指南
 

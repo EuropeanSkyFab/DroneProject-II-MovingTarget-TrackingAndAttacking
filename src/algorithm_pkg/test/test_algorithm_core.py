@@ -183,6 +183,82 @@ def test_predict_target_none_without_samples(measured):
     measured("state=None（没有可用采样）")
 
 
+def test_predict_ignores_future_timestamps(measured):
+    """场景：视觉把某一帧的时间戳误设到未来（stamp=100 秒），当前只有 2 秒。
+
+    操作：调用 predict_target()，把一帧正常采样和一帧未来采样一起传入。
+    输入：stamp=0、x=0；stamp=100、x=100；now=2，max_age=1。
+    预期：未来帧被丢弃，只能用 stamp=0 的帧；位置 (0,0,10)，
+          velocity_valid=False；age=2 超过 max_age，valid=False。
+    """
+    samples = [
+        TargetSample(0.0, 0.0, 0.0, 10.0),
+        TargetSample(100.0, 100.0, 0.0, 10.0),
+    ]
+    state = predict_target(samples, now=2.0, max_age=1.0)
+
+    assert state is not None
+    assert state.position == pytest.approx((0.0, 0.0, 10.0))
+    assert state.velocity == (0.0, 0.0, 0.0)
+    assert not state.velocity_valid
+    assert not state.valid
+
+    measured(
+        f"p@now={fmt_vec(state.position)}, age={state.age:.1f}s, "
+        f"valid={state.valid}（未来帧未参与拟合）"
+    )
+
+
+def test_predict_future_only_samples_return_none(measured):
+    """场景：所有采样都落在未来，可能是视觉时钟跳变或消息 stamp 写错。
+
+    操作：调用 predict_target()，只传一帧 stamp=100 的采样。
+    输入：stamp=100，now=2。
+    预期：没有可用采样，返回 None。
+    """
+    state = predict_target([TargetSample(100.0, 1.0, 2.0, 3.0)], now=2.0)
+
+    assert state is None
+
+    measured("state=None（全部为未来帧）")
+
+
+def test_predict_duplicate_timestamp_keeps_last_value(measured):
+    """场景：同一时刻收到两帧（后一帧是视觉修正值），时间差为 0。
+
+    操作：调用 predict_target()，两帧 stamp 都是 1.0。
+    输入：stamp=1、x=0；stamp=1、x=5；now=1.5。
+    预期：同一时间戳只保留最后一条，位置 (5,0,10)，速度无效。
+    """
+    samples = [
+        TargetSample(1.0, 0.0, 0.0, 10.0),
+        TargetSample(1.0, 5.0, 0.0, 10.0),
+    ]
+    state = predict_target(samples, now=1.5)
+
+    assert state is not None
+    assert state.position == pytest.approx((5.0, 0.0, 10.0))
+    assert state.velocity == (0.0, 0.0, 0.0)
+    assert not state.velocity_valid
+    assert state.stamp == pytest.approx(1.0)
+
+    measured(f"p@now={fmt_vec(state.position)}（保留同 stamp 的最后一帧）")
+
+
+def test_predict_invalid_arguments_raise(measured):
+    """场景：调用方把 max_age 或 max_speed 配成非法值。
+
+    操作：分别用 max_age=-0.1 和 max_speed=0 调用 predict_target()。
+    预期：两处都抛 ValueError，而不是静默返回 None。
+    """
+    with pytest.raises(ValueError):
+        predict_target([], now=0.0, max_age=-0.1)
+    with pytest.raises(ValueError):
+        predict_target([], now=0.0, max_speed=0.0)
+
+    measured("max_age<0 / max_speed=0 -> ValueError")
+
+
 # ============================================================
 # 第二组：拦截求解
 # 用到 solve_intercept()
@@ -341,6 +417,96 @@ def test_too_close_target_gives_no_point(measured):
     measured(f"point=None, reason={result.reason}")
 
 
+def test_intercept_accepts_lowercase_mode(measured):
+    """场景：上游联调时把动作写成小写并带空格（" intercept "）。
+
+    操作：调用 solve_intercept()，mode 传小写带空格串。
+    输入：own=(0,0,10)，target=(10,0,10)，v_t=(-5,0,0)，v_max=6。
+    预期：动作归一化为 INTERCEPT，可拦截，t_go=10/11，
+          拦截点 (60/11,0,10)。
+    """
+    target = make_state((10.0, 0.0, 10.0), (-5.0, 0.0, 0.0))
+    result = solve_intercept(
+        (0.0, 0.0, 10.0), target, 6.0, mode=" intercept "
+    )
+
+    assert result.action == "INTERCEPT"
+    assert result.reachable
+    assert result.reason == "intercept_point"
+    assert result.t_go == pytest.approx(10.0 / 11.0)
+    assert result.point == pytest.approx((60.0 / 11.0, 0.0, 10.0))
+
+    measured(
+        f"action={result.action}, t_go={result.t_go:.3f}s, "
+        f"point={fmt_vec(result.point)}"
+    )
+
+
+def test_intercept_stationary_target_beyond_t_go_uses_target_as_tail(measured):
+    """场景：目标悬停，但 t_go_max 太短，按己方速度赶不到。
+
+    操作：调用 solve_intercept()，mode=INTERCEPT，t_go_max=0.5。
+    输入：own=(0,0,10)，target=(10,0,10)，v_t=(0,0,0)，v_max=6，d_tail=4。
+    预期：不可达；目标速度为 0 时没有“后方”方向，
+          尾随点退化为目标位置 (10,0,10)，reason=fallback_tail。
+    """
+    target = make_state((10.0, 0.0, 10.0), (0.0, 0.0, 0.0))
+    result = solve_intercept(
+        (0.0, 0.0, 10.0),
+        target,
+        6.0,
+        mode="INTERCEPT",
+        t_go_max=0.5,
+        d_tail=4.0,
+    )
+
+    assert not result.reachable
+    assert result.reason == "fallback_tail"
+    assert result.point == pytest.approx((10.0, 0.0, 10.0))
+
+    measured(
+        f"reachable=False, point={fmt_vec(result.point)}, "
+        f"reason={result.reason}"
+    )
+
+
+def test_intercept_rejects_non_finite_input(measured):
+    """场景：己方位置里混入 NaN（状态消息损坏）。
+
+    操作：调用 solve_intercept()，own=(NaN,0,10)。
+    预期：point=None，reachable=False，reason=non_finite_input。
+    """
+    target = make_state((10.0, 0.0, 10.0), (0.0, 0.0, 0.0))
+    result = solve_intercept((math.nan, 0.0, 10.0), target, 6.0)
+
+    assert not result.reachable
+    assert result.point is None
+    assert result.reason == "non_finite_input"
+
+    measured(f"point=None, reason={result.reason}")
+
+
+def test_intercept_invalid_arguments_raise(measured):
+    """场景：调用方把速度上限、拦截时间或距离参数配成非法值。
+
+    操作：分别用 v_max=0、t_go_max=0、min_distance=-1、d_tail=-1 调用。
+    预期：每一处都抛 ValueError，避免带着错误配置继续飞。
+    """
+    target = make_state((10.0, 0.0, 10.0), (0.0, 0.0, 0.0))
+    own = (0.0, 0.0, 10.0)
+
+    with pytest.raises(ValueError):
+        solve_intercept(own, target, 0.0)
+    with pytest.raises(ValueError):
+        solve_intercept(own, target, 6.0, t_go_max=0.0)
+    with pytest.raises(ValueError):
+        solve_intercept(own, target, 6.0, min_distance=-1.0)
+    with pytest.raises(ValueError):
+        solve_intercept(own, target, 6.0, d_tail=-1.0)
+
+    measured("v_max=0 / t_go_max=0 / min_distance<0 / d_tail<0 -> ValueError")
+
+
 # ============================================================
 # 第三组：安全约束
 # 用到 apply_constraints()
@@ -433,3 +599,96 @@ def test_constraints_return_none_for_none_or_nan(measured):
     assert apply_constraints((math.nan, 0.0, 10.0), "TRACK") is None
 
     measured("point=None（空点/NaN）")
+
+
+def test_constraints_reject_invalid_arguments(measured):
+    """场景：配置里出现负的高度边界、零水平边界、零步长或矛盾高度。
+
+    操作：用五组非法参数分别调用 apply_constraints()。
+    输入：max_xy=0；max_step=0；min_alt=-1；
+          min_alt=10/max_alt=5；safe_alt=60/max_alt=50。
+    预期：每一组都抛 ValueError，不能带着错误包线继续裁剪。
+    """
+    with pytest.raises(ValueError):
+        apply_constraints((0.0, 0.0, 10.0), "TRACK", max_xy=0.0)
+    with pytest.raises(ValueError):
+        apply_constraints((0.0, 0.0, 10.0), "TRACK", max_step=0.0)
+    with pytest.raises(ValueError):
+        apply_constraints((0.0, 0.0, 10.0), "TRACK", min_alt=-1.0)
+    with pytest.raises(ValueError):
+        apply_constraints(
+            (0.0, 0.0, 10.0), "TRACK", min_alt=10.0, max_alt=5.0
+        )
+    with pytest.raises(ValueError):
+        apply_constraints(
+            (0.0, 0.0, 10.0), "TRACK", safe_alt=60.0, max_alt=50.0
+        )
+
+    measured("max_xy/max_step/高度边界非法 -> ValueError")
+
+
+def test_constraints_return_none_for_non_finite_own(measured):
+    """场景：己方状态消息损坏，own 里混入 NaN，但仍给了 max_step。
+
+    操作：调用 apply_constraints()，own=(NaN,0,10)。
+    预期：无法计算步长，返回 None，不发布该点。
+    """
+    point = apply_constraints(
+        (5.0, 0.0, 10.0),
+        "TRACK",
+        own=(math.nan, 0.0, 10.0),
+        max_step=1.0,
+    )
+
+    assert point is None
+
+    measured("point=None（own 非有限值）")
+
+
+def test_predict_rejects_non_finite_now(measured):
+    """场景：调用方把当前时刻算成了 NaN（时钟异常）。
+
+    操作：调用 predict_target()，now=NaN。
+    预期：直接返回 None，不做任何拟合。
+    """
+    state = predict_target([TargetSample(0.0, 0.0, 0.0, 10.0)], now=math.nan)
+
+    assert state is None
+
+    measured("state=None（now 非有限值）")
+
+
+def test_predict_skips_non_finite_samples(measured):
+    """场景：一帧里混入 NaN 坐标，另一帧正常。
+
+    操作：调用 predict_target()，两帧 stamp 分别为 0 和 1。
+    输入：stamp=0 的 x 是 NaN；stamp=1 的 x=1。
+    预期：NaN 帧被跳过，只用 stamp=1 的帧，位置 (1,0,10)。
+    """
+    samples = [
+        TargetSample(0.0, math.nan, 0.0, 10.0),
+        TargetSample(1.0, 1.0, 0.0, 10.0),
+    ]
+    state = predict_target(samples, now=1.0)
+
+    assert state is not None
+    assert state.position == pytest.approx((1.0, 0.0, 10.0))
+    assert not state.velocity_valid
+
+    measured(f"p@now={fmt_vec(state.position)}（NaN 帧被跳过）")
+
+
+def test_intercept_unknown_mode_returns_unsupported_mode(measured):
+    """场景：调用方把中枢动作（HOVER）误传给了拦截求解。
+
+    操作：调用 solve_intercept()，mode=HOVER。
+    预期：不求解，point=None，reason=unsupported_mode。
+    """
+    target = make_state((10.0, 0.0, 10.0), (0.0, 0.0, 0.0))
+    result = solve_intercept((0.0, 0.0, 10.0), target, 6.0, mode="HOVER")
+
+    assert not result.reachable
+    assert result.point is None
+    assert result.reason == "unsupported_mode"
+
+    measured(f"point=None, reason={result.reason}")

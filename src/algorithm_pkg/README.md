@@ -1,40 +1,112 @@
 # algorithm_pkg
 
-课题二规划算法包：纯算法核心 + ROS 2 适配节点。
+课题二规划算法包：**纯算法核心（P1/P2/P3）+ 纯逻辑适配层 + ROS 2 外壳**。
 
-## 组成
+它不控制中枢，只回答一个问题：**这一帧该不该发点、发哪个点**。
 
-- `algorithm_pkg/algorithm_core.py`：P1 目标预测、拦截求解、安全约束；不依赖 ROS。
-- `algorithm_pkg/plan_types.py`：P2 `PlanResult` 和动作分组；P3 在其上增加降级字段。
-- `algorithm_pkg/plan_params.py`：P2 `PlanParams`，按动作选择速度；P3 参数也集中在这里。
-- `algorithm_pkg/plan_policy.py`：P2 `plan()`，决定一帧发不发点。
-- `algorithm_pkg/validators.py`：P3 异常检测（目标/己方/指令分类）。
-- `algorithm_pkg/degrade_fsm.py`：P3 四级降级状态机与滞回/恢复。
-- `algorithm_pkg/degrade_policy.py`：P3 `plan_with_degrade()`，按级别发点。
-- `algorithm_pkg/safety_guard.py`：P3 输出护栏（边界/跳变/最小距离/stamp）。
-- `algorithm_pkg/algorithm_node.py`：ROS 适配层；调用 P2 的 `plan()`，只负责消息、参数、日志和发布。
-- `launch/algorithm.launch.py`：三机默认参数的一键启动。
-- `test/test_algorithm_core.py`：P1 纯算法单测。
-- `test/test_plan_*.py`：P2 参数、策略、模式切换测试。
-- `test/test_validators.py`、`test/test_degrade_*.py`、`test/test_safety_guard.py`、
-  `test/test_recovery.py`、`test/test_replay_anomaly.py`：P3 异常降级测试。
-- `test/simulate_p3.py`：三个复杂场景的时间推进仿真；支持 `--scenario/--tick/--csv` 单帧调试。
-- `文档/P2模式策略契约.md`：P2 的 7 动作表和边界说明。
-- `文档/P3降级策略.md`：P3 的 L0/L1/L2/L3 策略表、护栏顺序与待确认参数。
-- `文档/P3调试方法.md`：单函数、单帧、场景、系统四层调试方法与图表读法。
+当前状态：P1~P4 已完成，203 项 pytest；Humble 下 `colcon build/test/launch` 通过。
 
-## 编译与测试（Humble 容器内）
+---
 
-```bash
-source /opt/ros/humble/setup.bash
-cd /ws
-colcon build --packages-select algorithm_pkg --symlink-install
-source install/setup.bash
+## 一分钟看懂架构
 
-PYTHONPATH=src/algorithm_pkg python3 -m pytest -q src/algorithm_pkg/test
-colcon test --packages-select algorithm_pkg
-colcon test-result --verbose
+```text
+/vision/target_pose ───────┐
+/external/target_detected ─┤
+/strategy/cmd ─────────────┤        ┌────────────────────────────────┐
+/drone_<id>/state ─────────┘  ───▶  │ algorithm_node.py（ROS 外壳）   │
+                                    │ 收消息、20Hz 定时、发消息、日志  │
+                                    └───────────────┬────────────────┘
+                                                    │ 纯 Python 数据
+                                    ┌───────────────▼────────────────┐
+                                    │ adapter_core.py（翻译官）       │
+                                    │ 时间戳门禁、目标缓存、每机状态、 │
+                                    │ ATTACK 保持点、JSON payload      │
+                                    └───────────────┬────────────────┘
+                                    ┌───────────────▼────────────────┐
+                                    │ degrade_policy.py（调度员）     │
+                                    │ 按 L0~L3 决定这一帧怎么算        │
+                                    │  ├ validators.py（体检）        │
+                                    │  ├ degrade_fsm.py（记忆/滞回）  │
+                                    │  ├ safety_guard.py（安全员）    │
+                                    │  └ plan_policy.py（七动作合同） │
+                                    │       └ algorithm_core.py（公式）│
+                                    └────────────────────────────────┘
 ```
+
+一句话分工：
+
+- **外壳**只搬运，不做判断；
+- **翻译官**把 ROS 消息变成算法能吃的纯数据，并守住时间戳；
+- **调度员**决定正常 / 外推 / 保持 / 不发；
+- **合同层**决定七种动作各输出什么；
+- **公式层**只算几何和运动学。
+
+这样拆的好处：外壳可以很薄，翻译官能脱离 ROS 单测，公式层永远是纯函数。
+
+---
+
+## 一帧数据是怎么走的
+
+1. **收消息**：视觉/外部目标进 `TargetBuffer`，零时间戳、未来时间戳、倒退时间戳、NaN 帧直接丢；己方 state 存快照；`/strategy/cmd` 只改“这架飞机当前想干什么”。
+2. **20Hz tick**：`choose_target()` 选目标——视觉新鲜就用视觉，否则用外部，再否则用视觉的预测值。
+3. **算一帧**：`plan_drone()` 调 `plan_with_degrade()`——先体检（目标/己方/指令），再过降级状态机，再按级别规划，最后过安全护栏。
+4. **发或者不发**：有点就 `payload()` 生成 `{drone_id, stamp, x, y, z, action}`，`stamp` 用**发布时刻**；没点就一帧不发。
+5. **中枢接手**：中枢按自己的模式决定怎么飞。接口 C 里的 `action` 只是标签，不控制中枢模式。
+
+---
+
+## 每个文件是干什么的
+
+| 文件 | 层 | 一句话作用 |
+|---|---|---|
+| `algorithm_pkg/algorithm_core.py` | P1 | 公式内核：目标预测、拦截求解、单帧约束。不依赖 ROS。 |
+| `algorithm_pkg/plan_types.py` | P2 | 定义 `PlanResult`、七种动作分组、降级级别。所有层共用的“结果形状”。 |
+| `algorithm_pkg/plan_params.py` | P2/P3 | 所有可调参数集中在这里（`PlanParams`），带默认值和合法性校验；`v_max_for()` 按动作选速度。 |
+| `algorithm_pkg/plan_policy.py` | P2 | 七动作合同：`plan()` 决定这一帧发不发点、发哪个点。 |
+| `algorithm_pkg/validators.py` | P3 | 体检：把目标/己方/指令分成“正常、过期、非法、倒退、丢失”等状态。 |
+| `algorithm_pkg/degrade_fsm.py` | P3 | 记忆：L0 正常 / L1 外推 / L2 保持 / L3 无计划，带滞回和恢复计数。每架飞机一个实例。 |
+| `algorithm_pkg/degrade_policy.py` | P3 | 调度：`plan_with_degrade()` 把体检结果 + 状态机 + 分级规划 + 护栏串起来。 |
+| `algorithm_pkg/safety_guard.py` | P3 | 安全员：NaN、XY/高度边界、跳变、最小距离、时间戳单调，按顺序裁剪。 |
+| `algorithm_pkg/adapter_core.py` | P4 | 翻译官（纯逻辑）：时间戳门禁、目标缓冲、目标选择、每机 `DroneRuntime`、ATTACK 无解保持点、JSON payload。不 import rclpy。 |
+| `algorithm_pkg/algorithm_node.py` | P4 | ROS 外壳：订阅 A/B/D/E，20Hz 调 `plan_drone()`，发布 C，打日志。每架飞机复用同一个 FSM。 |
+| `launch/algorithm.launch.py` | P4 | 一键启动：31 个参数，默认三机 `drone_1/2/3`。 |
+| `scripts/p4/` | P4 | 联调脚本：单节点冒烟、单机闭环、失效注入、三机隔离、速度标定。 |
+| `package.xml` / `setup.py` | — | 依赖、节点入口、launch 注册。 |
+| `test/` | — | 203 项 pytest；`simulate_p3.py` 的时间推进仿真由 `test_scenario_p3.py` 固化，图表不参与断言。 |
+
+---
+
+## 谁负责什么（P4 定下的边界）
+
+这张表是理解代码的关键：同一件事只有一个地方做。
+
+| 事项 | 归谁 |
+|---|---|
+| 模式/动作从哪来 | 中枢 `/strategy/cmd`；节点只贴标签，不改中枢 |
+| 时间戳是否有问题 | P3 `validators`；节点原样搬运，**不改写** |
+| 视觉还是外部目标 | 适配层 `choose_target()` |
+| 降级到哪一级 | P3 `DegradeFSM`（每机一个实例） |
+| L1/L2 保持点 | P3 `degrade_policy` |
+| ATTACK 正常但无解时的保持点 | 适配层 `attack_hold()`（唯一的特例） |
+| 安全裁剪 | P3 `safety_guard`（P2 还会按己方位置限一次 `max_step`） |
+| 发布时刻的 `stamp` | 节点；用发布瞬间的 ROS clock |
+| 参数默认值 | `launch` → `PlanParams` |
+
+---
+
+## P4 相对 P3 改了什么
+
+1. **新增纯逻辑适配层** `adapter_core.py`：时间戳门禁、目标缓冲、每机 Runtime、ATTACK 保持点、payload 都搬到这里，可以脱离 ROS 单测。
+2. **节点重写**：从“只调 P2 + 自己改写时间戳 + 自己补保持点”改成“每机一个 `DegradeFSM` + 调 `plan_with_degrade()`”；节点只负责消息、参数、日志、发布。
+3. **三处搬迁**：
+   - 时间戳改写删除（以前把零/未来 stamp 改成 now，导致 P3 的“倒退帧”分支永远触发不了）；
+   - 保持点归 P3（L1 外推、L2 保持），节点只保留 ATTACK 正常无解这一个特例；
+   - 参数统一进 `launch`，共 31 个。
+4. **`max_step` 默认 0.62 m/帧**：12.4 m/s × 0.05s。实验依据见 `文档/P4联调记录.md`：0.30/0.38 会把 ATTACK 压到追不上（最小目标距退化到 50/44m）。
+5. **测试**：新增 `test_node_adapter.py` 13 项、`test_scenario_p3.py` 5 项；P1/P2 补强 23 项；总数 203。
+
+---
 
 ## 运行
 
@@ -43,28 +115,49 @@ ros2 launch algorithm_pkg algorithm.launch.py
 ```
 
 节点默认 `HOVER`，收到 `/strategy/cmd` 的 `TRACK/INTERCEPT/ATTACK` 后才发点。
+
 典型顺序：先 `TAKEOFF`，再 `TRACK` 或 `INTERCEPT/ATTACK`。
 
-P2 在每帧发点前还会做一次 0.5 秒的预测年龄门限（`max_pred_age`）；
-超过门限的旧目标不会继续被用来算拦截点。`ATTACK` 无解或目标失效时，
-适配层会发布“当前位置保持点”，避免中枢继续使用上一帧攻击点。
+`no_plan` 本身不发接口 C。ATTACK 无解时，适配层补“己方当前位置保持点”
+（`reason=hold_attack_no_solution`），避免中枢继续用上一帧攻击点。
 
-## P3 异常降级（纯算法层）
+参数都在 launch 里，常用几个：
 
-P3 在 P2 外面再包一层，仍然不 import rclpy、不新增 ROS 逻辑：
+| 参数 | 默认 | 含义 |
+|---|---|---|
+| `v_max` | 6.0 | 兜底速度 |
+| `v_max_intercept` | 7.6 | INTERCEPT 速度上限 |
+| `v_max_attack` | 12.4 | ATTACK 速度上限 |
+| `max_step` | 0.62 | 单帧最大跳变（米） |
+| `max_pred_age` | 0.5 | 目标预测年龄上限（秒） |
+| `ego_timeout` | 1.0 | 己方状态超时（秒） |
+| `d_tail` | 4.0 | INTERCEPT 尾随距离（米） |
+| `min_alt` / `safe_alt` / `max_alt` | 3 / 5 / 50 | 高度边界（米） |
+| `max_xy` | 1000 | 水平边界（米） |
 
-- `plan_with_degrade()` 按 L0/L1/L2/L3 输出：正常、CV 外推、保持、no_plan；
-- 目标短暂丢失（`age <= t_extrap_max`）用外推继续追；超过上限改发保持点；
-  己方断流、目标 NaN/越界或指令非法才进 L3；
-- 所有输出再走 `apply_safety_guard()`：NaN、XY/高度边界、目标点跳变、
-  与目标最小距离、时间戳单调；
-- 时间戳倒退帧只丢弃，不改变降级级别；
-- 参数全部在 `PlanParams`，默认值待联调确认；策略表和 8 个待确认接口
-  问题见 `文档/P3降级策略.md`。
+---
 
-P3 不改变 P2 的七动作语义，也不改中枢；`algorithm_node.py` 的接线放在 P4。
-当前 P1+P2+P3 共 162 项 pytest（`PYTHONPATH=src/algorithm_pkg
-/usr/bin/python3 -m pytest -q src/algorithm_pkg/test`）。
+## 测试
+
+```bash
+PYTHONPATH=src/algorithm_pkg /usr/bin/python3 -m pytest -q src/algorithm_pkg/test
+# 或 Humble 容器内
+colcon test --packages-select algorithm_pkg
+colcon test-result --verbose
+```
+
+| 层 | 文件 | 数量 |
+|---|---|---|
+| P1 | `test_algorithm_core.py` | 33 |
+| P2 | `test_plan_params.py`、`test_plan_policy.py`、`test_plan_replay.py` | 61 |
+| P3 | `test_validators.py`、`test_degrade_fsm.py`、`test_degrade_policy.py`、`test_safety_guard.py`、`test_recovery.py`、`test_replay_anomaly.py` | 91 |
+| P4 | `test_node_adapter.py` | 13 |
+| 场景 | `test_scenario_p3.py` | 5 |
+
+`simulate_p3.py` 是三个复杂场景的时间推进仿真，A/B/C 已由 `test_scenario_p3.py` 固化为 pytest；
+也可单独跑 CLI 看迁移过程、导出 CSV/JSON 和图，用法见 `文档/P3调试方法.md`。
+
+---
 
 ## 接口
 
@@ -80,17 +173,39 @@ P3 不改变 P2 的七动作语义，也不改中枢；`algorithm_node.py` 的�
 - `/planning/target_pose`：`std_msgs/String` JSON，
   字段 `drone_id`、`stamp`、`x`、`y`、`z`、`action`。
 
-`stamp` 是发布时刻的 ROS 时钟秒数。话题名是公共契约，不随包名变化。
+`stamp` 是发布时刻的 ROS 时钟秒数；话题名是公共契约，不随包名变化。
+接口 C 是**单 topic**，多机靠 JSON 里的 `drone_id` 区分。
 
-## 约束
+---
 
-- 只对 `TRACK/INTERCEPT/ATTACK` 发点；`TAKEOFF/HOVER/RETURN` 由中枢生成。
-- `TRACK` 发目标预测点，不做 standoff；中枢在近距离自己加环绕偏移。
-- `INTERCEPT` 不可达发尾随点；`ATTACK` 不可达时 P2 不发点，适配层改发
-  “当前位置保持点”，避免中枢继续使用旧攻击点。
-- `TRACK/INTERCEPT` 最低 5m，`ATTACK` 最低 3m，最高 50m，XY ±1000m。
-- `INTERCEPT/ATTACK` 至少两帧目标（`velocity_valid=True`）且预测年龄不超过
-  `max_pred_age`（默认 0.5s）才发点。
+## 已知问题（P4 联调记录在案，不在本包修）
+
+- **no_plan 不等于停飞机**：中枢最多保留旧点约 2.0s（实测 1.98s），之后才停发。
+  验收口径改为“保留时长 + `max_step` 量化盲飞距离”。
+- **TRACK 优先视觉**：中枢在视觉新鲜时直接用视觉原始目标，P3 的 TRACK 点可能不被执行。
+  这是中枢策略，不是算法 bug。
+- **RESUME_PATROL 无分支**：中枢会写入该模式，但 timer 里没有对应分支，该机此后不再收到 setpoint。
+- **E/F 自回灌**：`/drone_<id>/state` 中枢既订阅又发布；节点按 `header.stamp` 判新鲜，
+  旧 stamp 帧不会覆盖新帧，但回灌会影响“断流”判断的语义。
+- **mock 速度上限低于配置**：dry bridge 是 10/6/3 m/s，配置是 12.4/7.6/6.0，
+  标定表按实测记录，真机需重测。
+- **接口 C 的 action 不是控制输入**：中枢 `plan_callback` 不解析它；它只是标签。
+
+---
+
+## 文档导航
+
+- `文档/算法原理与策略.md`：P1 的预测/拦截/尾随原理与系统约定。
+- `文档/P2模式策略契约.md`：七动作合同与边界。
+- `文档/P3降级策略.md`：L0/L1/L2/L3 策略表、护栏顺序、待确认参数。
+- `文档/P3调试方法.md`：单函数、单帧、场景、系统四层调试方法与图表读法。
+- `文档/P3三个复杂场景仿真.md`：A/B/C 三个场景的结果与读法。
+- `文档/P4联调记录.md`：冒烟、闭环、失效、三机、标定、Humble、裁决实验与已知问题。
+- `文档/课题二内部接口规范.md`、`文档/课题二-课题三-接口规范.md`：上下游接口。
+- `文档/Jazzy开发与Humble交付指南.md`：容器与交付约定。
+- `文档/代码注释规范.md`：注释风格（Google docstring + `# !` 等标签）。
+
+---
 
 ## 上游更新策略
 
