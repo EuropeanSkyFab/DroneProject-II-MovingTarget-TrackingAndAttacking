@@ -35,8 +35,8 @@ from algorithm_pkg.plan_types import PlanResult
 
 
 def _params(**overrides) -> PlanParams:
-    """测试用参数：默认单帧跳变 0.62m，与 launch 默认一致。"""
-    values = {"max_step": 0.62}
+    """测试用参数：默认单帧跳变 0.30m，与 launch 默认一致。"""
+    values = {"max_step": 0.30}
     values.update(overrides)
     return PlanParams(**values)
 

@@ -1,4 +1,4 @@
-"""P4 三机隔离探针：1 个 algorithm_node（drone_1/2/3），验证不串机。
+"""P4 三机隔离探针：1 个 algorithm_node（drone_1/2/3），验证不同飞机之间互不影响。
 
 0.5  三机都发 TRACK
 2.0-4.0  停发 drone_2 的 state（应只影响 drone_2，进 NO_PLAN）
@@ -117,7 +117,7 @@ def main():
         near_y = all(abs(p["y"]) <= 1.0 for p in early[d])
         detail[d] = f"x≈{round(early[d][-1]['x'], 2)} (home {x})"
         own_ok = own_ok and near and near_y
-    add("各机用己方 position，不串机", own_ok, detail)
+    add("各机使用己方 position，互不影响", own_ok, detail)
 
     d2_l3 = win(node.plans, 3.3, 4.1, "drone_2")
     add("drone_2 断流后停发", len(d2_l3) == 0, f"drone_2={len(d2_l3)}")
@@ -139,7 +139,7 @@ def main():
         f"drone_3={len(win(node.plans, 4.6, END_AT, 'drone_3'))}")
     ids = {p["drone_id"] for _, p in node.plans}
     add("接口 C 单 topic 只含三机 id", ids == set(HOME), ids)
-    add("未知 drone_id 被忽略且不崩", "drone_9" not in log or len(node.plans) > 0,
+    add("未知 drone_id 被忽略且节点不退出", "drone_9" not in log or len(node.plans) > 0,
         f"plans={len(node.plans)}")
 
     failures = [c for c in checks if not c[1]]

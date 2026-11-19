@@ -1,17 +1,11 @@
-"""P2 策略参数：把“不同模式用不同速度”集中在一个地方。
+"""P2 策略参数：集中所有可调参数，启动时校验。
 
-P1 的 ``solve_intercept`` 只接受一个 ``v_max``。到了 P2，动作有
-TRACK / INTERCEPT / ATTACK 三种，飞控给它们的步长上限也不同，
-所以不能在调用处随手传一个数字。
+速度口径以《内部分工细节》(V2.0) 为准：最大平飞速度 ``V_max = 6.0 m/s``。
+INTERCEPT/ATTACK 的“全速”也是 6.0，不再使用 P4 联调时的 7.6/12.4。
+原因：那两档是飞控步长 0.38/0.62 m × 20 Hz 推出来的，和宪章的 V_max 冲突；
+宪章是团队最高准则，先按 6.0 统一。
 
-这三个默认值来自上游飞控的步长：
-
-- INTERCEPT: 0.38 m / 控制周期 × 20 Hz = 7.6 m/s
-- ATTACK:    0.62 m / 控制周期 × 20 Hz = 12.4 m/s
-- v_max:     6.0 m/s，只作为兜底
-
-注意：7.6/12.4 是“飞控控制周期”的换算，不是规划节点的发布频率。
-如果飞控周期变了，应改这里的参数，而不是在策略函数里写死。
+如果团队确认飞控确实允许更大步长，改这三个字段即可，不要在策略函数里写死。
 """
 
 from __future__ import annotations
@@ -26,9 +20,9 @@ class PlanParams:
     """P2 一帧规划需要的全部参数。
 
     Attributes:
-        v_max: 兜底速度上限，米/秒。
-        v_max_intercept: INTERCEPT 速度上限，米/秒。
-        v_max_attack: ATTACK 速度上限，米/秒。
+        v_max: 兜底速度上限，米/秒，按宪章 V_max=6.0。
+        v_max_intercept: INTERCEPT 速度上限，米/秒；宪章下同为 6.0。
+        v_max_attack: ATTACK 速度上限，米/秒；宪章下同为 6.0。
         t_go_max: 最长允许拦截时间，秒；超过认为追不上。
         min_distance: 目标太近时不出点，米。
         d_tail: INTERCEPT 追不上时，尾随点距目标多远，米。
@@ -62,8 +56,8 @@ class PlanParams:
     """
 
     v_max: float = 6.0
-    v_max_intercept: float = 7.6
-    v_max_attack: float = 12.4
+    v_max_intercept: float = 6.0
+    v_max_attack: float = 6.0
     t_go_max: float = 8.0
     min_distance: float = 0.5
     d_tail: float = 4.0
@@ -75,7 +69,8 @@ class PlanParams:
     max_pred_age: float = 0.5
 
     # ------------------------- P3 异常降级参数 -------------------------
-    # 以下是“可配置、可标定”的初值，联调后按 P3降级策略.md 调整；
+    # 以下是“可配置、可标定”的初值，联调后按 src/algorithm_pkg/README.md
+    # 的“降级生存法则”调整；
     # 不要在降级代码里再写死这些数字。
     t_extrap_max: float = 1.0
     n_enter: int = 2
@@ -120,7 +115,7 @@ class PlanParams:
         if not isfinite(self.max_pred_age) or self.max_pred_age <= 0.0:
             raise ValueError("max_pred_age must be positive")
 
-        # P3 参数的校验：错误配置在节点启动时就暴露，而不是降级时才炸。
+        # P3 参数的校验：错误配置在节点启动时即暴露，而不是在降级过程中才失败。
         if not isfinite(self.t_extrap_max) or self.t_extrap_max <= 0.0:
             raise ValueError("t_extrap_max must be positive")
         for name, value in (

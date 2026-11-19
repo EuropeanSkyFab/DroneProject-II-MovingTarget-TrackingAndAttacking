@@ -12,18 +12,18 @@ import pytest
 from algorithm_pkg.plan_params import PlanParams
 
 
-def test_default_params_match_three_speed_levels(measured):
-    """场景：没有传任何参数，使用 P2 默认值。
+def test_default_params_follow_charter_v_max(measured):
+    """场景：不传参数，速度口径必须服从《内部分工细节》。
 
-    操作：构造 PlanParams()，读取三个速度上限。
+    操作：构造 PlanParams()，读取三个速度字段。
     输入：无。
-    预期：兜底 6.0、INTERCEPT 7.6、ATTACK 12.4 m/s。
+    预期：宪章 V_max=6.0，三个字段同为 6.0 m/s。
     """
     params = PlanParams()
 
     assert params.v_max == pytest.approx(6.0)
-    assert params.v_max_intercept == pytest.approx(7.6)
-    assert params.v_max_attack == pytest.approx(12.4)
+    assert params.v_max_intercept == pytest.approx(6.0)
+    assert params.v_max_attack == pytest.approx(6.0)
 
     measured(
         f"v_max={params.v_max:.1f}, "
@@ -37,13 +37,13 @@ def test_v_max_for_selects_by_action(measured):
 
     操作：调用 v_max_for()，分别传入 TRACK/INTERCEPT/ATTACK/unknown。
     输入：默认 PlanParams。
-    预期：TRACK=6.0，INTERCEPT=7.6，ATTACK=12.4，unknown=6.0 兜底。
+    预期：宪章下 TRACK/INTERCEPT/ATTACK 都是 6.0，unknown 同样回落到 6.0。
     """
     params = PlanParams()
 
     assert params.v_max_for("TRACK") == pytest.approx(6.0)
-    assert params.v_max_for("INTERCEPT") == pytest.approx(7.6)
-    assert params.v_max_for("ATTACK") == pytest.approx(12.4)
+    assert params.v_max_for("INTERCEPT") == pytest.approx(6.0)
+    assert params.v_max_for("ATTACK") == pytest.approx(6.0)
     assert params.v_max_for("something") == pytest.approx(6.0)
 
     measured(
@@ -58,11 +58,11 @@ def test_v_max_for_is_case_and_space_insensitive(measured):
 
     操作：调用 v_max_for(" intercept ")。
     输入：小写且带空格的 INTERCEPT。
-    预期：仍返回 INTERCEPT 的 7.6 m/s。
+    预期：仍返回 INTERCEPT 的 6.0 m/s。
     """
     params = PlanParams()
 
-    assert params.v_max_for(" intercept ") == pytest.approx(7.6)
+    assert params.v_max_for(" intercept ") == pytest.approx(6.0)
 
     measured(f"v_max_for(' intercept ')={params.v_max_for(' intercept '):.1f}")
 

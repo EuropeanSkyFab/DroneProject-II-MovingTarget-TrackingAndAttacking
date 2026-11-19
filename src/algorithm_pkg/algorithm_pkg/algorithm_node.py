@@ -19,9 +19,9 @@ ROS 参数（launch 里的默认值）：
 ====================================  =========  ==========================================
 ``drone_ids``                         drone_1..3  必须与中枢 ``swarm_config`` 一致
 ``publish_rate_hz``                   20.0       规划定时器频率，Hz
-``v_max``                             6.0        兜底速度，m/s
-``v_max_intercept``                   7.6        INTERCEPT 速度，m/s
-``v_max_attack``                      12.4       ATTACK 速度，m/s
+``v_max``                             6.0        宪章 V_max，m/s
+``v_max_intercept``                   6.0        INTERCEPT 速度，m/s；宪章下同为 V_max
+``v_max_attack``                      6.0        ATTACK 速度，m/s；宪章下同为 V_max
 ``t_go_max``                          8.0        最大拦截时间，s
 ``max_age``                           1.0        目标采样最大年龄，s
 ``max_pred_age``                      0.5        预测点最大年龄，s
@@ -32,7 +32,7 @@ ROS 参数（launch 里的默认值）：
 ``safe_alt``                          5.0        TRACK/INTERCEPT 最低高度，m
 ``max_alt``                           50.0       最高高度，m
 ``max_xy``                            1000.0     水平边界，m
-``max_step``                          0.62       单帧最大跳变，m；0 表示不限制
+``max_step``                          0.30       单帧最大跳变，m；0 表示不限制
 ``target_timeout``                    0.5        视觉/外部源切换阈值，s
 ``history_sec``                       3.0        目标采样窗口，s
 ``default_action``                    HOVER      未收到战术指令时的模式
@@ -120,18 +120,18 @@ class AlgorithmNode(Node):
             self.declare_parameter("default_action", "HOVER").value
         ).strip().upper()
 
-        # ! max_step 默认 0.62 = 12.4 m/s × 0.05s，保证 ATTACK 可达。
-        # ! 0 仍保留为“不限幅”的兼容入口；联调/交付不要用 0（见 P4 记录）。
-        max_step_value = float(self.declare_parameter("max_step", 0.62).value)
+        # ! max_step 默认 0.30 = 宪章 V_max 6.0 m/s × 0.05s。
+        # ! 0 仍保留为“不限幅”的兼容入口；联调/交付不要用 0。
+        max_step_value = float(self.declare_parameter("max_step", 0.30).value)
         max_step = max_step_value if max_step_value > 0.0 else None
 
         self._params = PlanParams(
             v_max=float(self.declare_parameter("v_max", 6.0).value),
             v_max_intercept=float(
-                self.declare_parameter("v_max_intercept", 7.6).value
+                self.declare_parameter("v_max_intercept", 6.0).value
             ),
             v_max_attack=float(
-                self.declare_parameter("v_max_attack", 12.4).value
+                self.declare_parameter("v_max_attack", 6.0).value
             ),
             t_go_max=float(self.declare_parameter("t_go_max", 8.0).value),
             min_distance=float(

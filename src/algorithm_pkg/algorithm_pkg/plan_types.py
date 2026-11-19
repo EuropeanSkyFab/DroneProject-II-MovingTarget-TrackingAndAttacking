@@ -19,7 +19,8 @@ from algorithm_pkg.algorithm_core import Vec3
 # 只有这三个动作需要规划节点发点。
 PLAN_ACTIONS = ("TRACK", "INTERCEPT", "ATTACK")
 
-# 这三个动作的坐标由中枢自己生成，规划节点不应抢控制。
+# 中枢动作。TAKEOFF/RETURN 的坐标由中枢生成；HOVER 在 P2 里
+# 单独处理：发己方当前位置（宪章语义：原地保持不动）。
 CENTER_ACTIONS = ("TAKEOFF", "HOVER", "RETURN")
 
 # 接口里提到、但当前没有定义行为的动作。
@@ -37,7 +38,7 @@ class PlanResult:
     """一帧规划的完整结果。
 
     不要用裸 ``None`` 表示“不发点”，因为那样分不清是：
-    - 动作本来就不该发点（HOVER）；
+    - 动作本来就不该发点（TAKEOFF/RETURN）；
     - 目标过期；
     - 拦截无解；
     - 未知动作。

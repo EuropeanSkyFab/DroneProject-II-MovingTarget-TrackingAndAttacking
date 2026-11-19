@@ -1,7 +1,7 @@
 """P2 回放测试：连续切换动作时，不能把上一模式的点带过来。
 
 P2 的 plan() 是无状态纯函数；这里仍按“时间顺序”连续调用，
-模拟中枢真实发指令的方式，防止以后有人往模块里塞缓存后出现泄漏。
+模拟中枢下发指令的方式，避免模块内引入缓存后产生状态泄漏。
 
 运行：
     PYTHONPATH=src/algorithm_pkg /usr/bin/python3 -m pytest -q \
@@ -32,7 +32,7 @@ def test_full_mode_sequence_keeps_each_result_independent(measured):
 
     操作：按顺序连续调用 plan()。
     输入：同一个有效目标和己方位置。
-    预期：前两个和最后一个不发点；TRACK/INTERCEPT 发点；
+    预期：HOVER 发当前保持点；TRACK/INTERCEPT 发点；
           ATTACK 这里可达，也发点。
     """
     target = make_target()
@@ -40,8 +40,8 @@ def test_full_mode_sequence_keeps_each_result_independent(measured):
     actions = ["HOVER", "TRACK", "INTERCEPT", "ATTACK", "TRACK", "HOVER"]
     results = [plan(action, own, target) for action in actions]
 
-    assert results[0].point is None
-    assert results[0].reason == "hover_center_generated"
+    assert results[0].should_publish
+    assert results[0].reason == "hover_hold"
     assert results[1].should_publish
     assert results[1].reason == "track_target_point"
     assert results[2].should_publish
@@ -50,8 +50,8 @@ def test_full_mode_sequence_keeps_each_result_independent(measured):
     assert results[3].reason == "intercept_point"
     assert results[4].should_publish
     assert results[4].reason == "track_target_point"
-    assert results[5].point is None
-    assert results[5].reason == "hover_center_generated"
+    assert results[5].should_publish
+    assert results[5].reason == "hover_hold"
 
     measured(
         " -> ".join(

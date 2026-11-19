@@ -3,7 +3,8 @@
 调用顺序故意固定，目的是让错误原因可复现：
 
 1. 归一化动作；未知动作直接拒绝；
-2. TAKEOFF/HOVER/RETURN 由中枢负责；RESUME_PATROL 暂不定义；
+2. HOVER 发己方当前位置（原地保持）；TAKEOFF/RETURN 由中枢负责；
+   RESUME_PATROL 暂不定义；
 3. 检查目标是否存在、是否有效、是否太旧；
 4. 检查己方位置是否有效；
 5. INTERCEPT/ATTACK 还要求目标速度有效；
@@ -85,6 +86,30 @@ def plan(
         return _no_plan(action, raw, "unknown_action")
 
     # 2. 中枢自己生成坐标的动作：规划节点不参与。
+    #    HOVER 例外：《内部分工细节》把它定义为“在当前坐标原地保持不动”，
+    #    所以直接发己方当前位置。这样即使中枢还在用上一帧规划点，也会被
+    #    这一帧的保持点覆盖。
+    if action == "HOVER":
+        if not _finite_vec(own):
+            return _no_plan(action, raw, "own_invalid")
+        # ! 地面/越界时不发：中枢 plan_callback 只接受
+        # ! z ∈ [min_alt, max_alt]、|x|/|y| <= max_xy，越界会被丢弃并打 warn。
+        if (
+            abs(own[0]) > params.max_xy
+            or abs(own[1]) > params.max_xy
+            or own[2] < params.min_alt
+            or own[2] > params.max_alt
+        ):
+            return _no_plan(action, raw, "hover_out_of_envelope")
+        return PlanResult(
+            action=action,
+            raw_action=raw,
+            point=own,
+            reachable=True,
+            t_go=None,
+            reason="hover_hold",
+        )
+
     if action in CENTER_ACTIONS:
         return _no_plan(action, raw, f"{action.lower()}_center_generated")
 

@@ -41,17 +41,16 @@ def fmt_vec(value):
 
 
 def test_center_generated_actions_have_no_point(measured):
-    """场景：TAKEOFF/HOVER/RETURN 的坐标由中枢生成。
+    """场景：TAKEOFF/RETURN 的坐标由中枢生成。
 
     操作：分别调用 plan()。
-    输入：action 为 TAKEOFF/HOVER/RETURN，目标有效，己方在原点。
+    输入：action 为 TAKEOFF/RETURN，目标有效，己方在原点。
     预期：point=None，reason 分别说明“中枢负责”。
     """
     target = make_target()
     own = (0.0, 0.0, 10.0)
     expected = {
         "TAKEOFF": "takeoff_center_generated",
-        "HOVER": "hover_center_generated",
         "RETURN": "return_center_generated",
     }
 
@@ -61,10 +60,55 @@ def test_center_generated_actions_have_no_point(measured):
         assert result.reason == reason
         assert not result.should_publish
 
-    measured(
-        "TAKEOFF/HOVER/RETURN -> point=None；"
-        "原因分别是 takeoff/hover/return_center_generated"
-    )
+    measured("TAKEOFF/RETURN -> point=None；原因分别为 takeoff/return_center_generated")
+
+
+def test_hover_publishes_current_position(measured):
+    """场景：宪章把 HOVER 定义为“在当前坐标原地保持不动”。
+
+    操作：调用 plan("HOVER", own, target)。
+    输入：own=(1,2,10)，目标有效。
+    预期：point=own，reason=hover_hold，reachable=True，可以发布。
+    """
+    own = (1.0, 2.0, 10.0)
+    result = plan("HOVER", own, make_target())
+
+    assert result.should_publish
+    assert result.point == pytest.approx(own)
+    assert result.reason == "hover_hold"
+    assert result.reachable
+
+    measured(f"point={fmt_vec(result.point)}, reason={result.reason}")
+
+
+def test_hover_on_ground_has_no_point(measured):
+    """场景：飞机还在地面（z=0），送给中枢会被安全围栏丢掉。
+
+    操作：调用 plan("HOVER", (0,0,0), target)。
+    输入：己方在地面。
+    预期：point=None，reason=hover_out_of_envelope，不刷中枢的 warn。
+    """
+    result = plan("HOVER", (0.0, 0.0, 0.0), make_target())
+
+    assert result.point is None
+    assert result.reason == "hover_out_of_envelope"
+
+    measured(f"point=None, reason={result.reason}")
+
+
+def test_hover_without_own_position_has_no_point(measured):
+    """场景：己方状态还没到，HOVER 不知道要保持哪个点。
+
+    操作：调用 plan("HOVER", None, target)。
+    输入：own=None。
+    预期：point=None，reason=own_invalid。
+    """
+    result = plan("HOVER", None, make_target())
+
+    assert result.point is None
+    assert result.reason == "own_invalid"
+
+    measured(f"point=None, reason={result.reason}")
 
 
 def test_resume_patrol_is_explicitly_unspecified(measured):

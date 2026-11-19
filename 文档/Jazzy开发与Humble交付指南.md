@@ -6,11 +6,11 @@
 >
 > 目标：不再维护“主机 Jazzy + 容器 Humble”的双环境。代码在主机编辑，编译、测试、launch、GUI、联调、交付验收全部在同一个 Humble 容器里做。
 >
-> 一句话原则：**主机只负责编辑和 Git；容器是唯一的 ROS 2 环境。** 不要在主机的 Jazzy 里 source、编译或启动本项目的节点。
+> 原则：**主机只负责编辑和 Git；容器是唯一的 ROS 2 环境。** 不要在主机 Jazzy 环境中 source、编译或启动本项目节点。
 
 ---
 
-## 0. 先看结论
+## 0. 总体做法
 
 | 事项 | 做法 |
 |---|---|
@@ -29,7 +29,7 @@
 
 之前“主机 Jazzy 写代码 + Humble 容器验收”的方案有两个问题：
 
-1. **两套环境容易混**：主机 Jazzy 的 Python 3.12、numpy、cv_bridge 与 Humble 的 Python 3.10、numpy 1.x 不一致；一不留神就在主机上跑出了“假通过”。
+1. **两套环境容易混用**：主机 Jazzy 的 Python 3.12、numpy、cv_bridge 与 Humble 的 Python 3.10、numpy 1.x 不一致，可能在主机环境得到与 Humble 不一致的测试结果。
 2. **联调链路必须同发行版**：Jazzy 节点和 Humble 节点混在同一个 `ROS_DOMAIN_ID` 里，DDS 类型哈希、QoS、共享内存都可能出问题，不能作为验收依据。
 
 现在统一为：**主机不装/不 source ROS，所有命令都进 Humble 容器。** 这样只剩一套 Python、一套 numpy、一套 DDS，联调和交付一致。
@@ -98,14 +98,14 @@ docker run -it \
 
 | 参数 | 作用 |
 |---|---|
-| `--net=host` | 容器和主机共用网络，DDS 发现最省事 |
+| `--net=host` | 容器和主机共用网络，简化 DDS 发现 |
 | `--ipc=host` | 共享 `/dev/shm`，避免 Fast DDS 共享内存跨容器失败 |
 | `-e ROS_DOMAIN_ID=0` | 团队统一 domain；不要和主机 Jazzy 的 domain 混用 |
 | `-e DISPLAY` + X11 挂载 | RViz、rqt、Tkinter GUI 需要 |
 | `-v "$HOME/Projects/ros2_ws:/ws"` | 代码双向挂载；主机改完容器立即可见 |
 | `-w /ws` | 进入容器就在工作空间根目录 |
 
-> **不要照抄旧容器的挂载。** 如果执行 `docker inspect ros2_humble_dev --format '{{json .Mounts}}'` 看到的是 `/home/silensky/ros2_ws → /root/ros2_ws`，那是一个空目录，不是本仓库。继续用旧容器会看到 `/root/ros2_ws` 下没有 `src/`，所有 `colcon build` 都会“成功但没有包”。
+> **不要沿用旧容器的挂载配置。** 如果执行 `docker inspect ros2_humble_dev --format '{{json .Mounts}}'` 看到的是 `/home/silensky/ros2_ws → /root/ros2_ws`，该目录为空，不是本仓库。继续使用旧容器时，`/root/ros2_ws` 下没有 `src/`，`colcon build` 会显示成功但没有编译任何包。
 >
 > 处理办法：确认旧容器里没有要保留的东西后删除重建：
 >
@@ -160,7 +160,7 @@ sudo chown -R "$(id -u):$(id -g)" \
   "$HOME/Projects/ros2_ws/log"
 ```
 
-更彻底的做法是自定义镜像里创建同 UID/GID 的用户；但那样容器内不能直接 `apt install`，依赖要提前写进镜像。团队内部用 root + `chown` 更省事。
+更彻底的做法是在自定义镜像中创建相同 UID/GID 的用户；此时容器内不能直接执行 `apt install`，依赖需要提前写入镜像。团队内部使用 root + `chown` 更简单。
 
 ---
 
@@ -228,12 +228,12 @@ ros2 topic pub --once /strategy/cmd std_msgs/msg/String \
 
 注意：
 
-- `algorithm_node` 默认 `default_action=HOVER`，不会主动发点。必须先收到 `/strategy/cmd` 的 `TRACK`、`INTERCEPT` 或 `ATTACK`，才会进入规划。
+- `algorithm_node` 默认 `default_action=HOVER`，每帧发布己方当前位置（`reason=hover_hold`）。收到 `/strategy/cmd` 的 `TRACK`、`INTERCEPT` 或 `ATTACK` 后，改为发布规划点。
 - 如果算法节点比战术指令晚启动，它可能错过那条指令；重新发一次即可，或把 launch 参数 `default_action` 改成需要的模式（不推荐默认 `ATTACK`）。
-- `TAKEOFF/HOVER/RETURN` 的坐标由中枢生成，算法节点**不发布**这些模式的点。
+- `TAKEOFF/RETURN` 的坐标由中枢生成，算法节点**不发布**这两个模式的点；`HOVER` 由算法节点发布己方当前位置。
 - 中枢的 `TRACK` 优先使用 `/vision/target_pose`，规划点只是兜底；`INTERCEPT/ATTACK` 只使用 `/planning/target_pose`。
 - 中枢 `plan_callback` 不解析规划 JSON 里的 `action`；真正的模式来自 `/strategy/cmd`。规划里的 `action` 只作为标签/调试信息。
-- `ATTACK` 无解时算法节点不发点；中枢会保留上一帧最多 2 秒。这是已知的联调风险，不能把“停发”当作立即刹车。
+- `ATTACK` 无解时策略层不输出规划点，适配层补发己方当前位置保持点；若完全无点，中枢会保留上一帧最多 2 秒。这是已知的联调风险，不能把“停止发布”视为立即停止。
 
 ### 3.4 GUI
 
@@ -310,7 +310,7 @@ docker run -it \
 
 ## 5. Humble 兼容规则
 
-虽然不再有主机 Jazzy，代码仍然要按 Humble 的边界写，防止队友在别的环境里打开就炸。
+虽然不再使用主机 Jazzy，代码仍按 Humble 的边界编写，避免在其他环境中运行时出错。
 
 ### 5.1 Python 3.10
 
@@ -385,12 +385,12 @@ src/algorithm_pkg/
 
 约束：
 
-- 只对 `TRACK/INTERCEPT/ATTACK` 发点；`TAKEOFF/HOVER/RETURN/RESUME_PATROL` 不发。
+- `TRACK/INTERCEPT/ATTACK` 发布规划点；`HOVER` 发布己方当前位置保持点；`TAKEOFF/RETURN/RESUME_PATROL` 不发布。
 - `TRACK` 发目标预测点，不做 standoff；中枢会在 5 米内自己加环绕偏移，避免双重偏移。
-- `INTERCEPT` 不可达时发目标运动方向后方 `d_tail=4.0m` 的尾随点；`ATTACK` 不可达时发 `None`，绝不尾随。
+- `INTERCEPT` 不可达时发布目标运动方向后方 `d_tail=4.0m` 的尾随点；`ATTACK` 不可达时不输出尾随点，策略层返回 `None`，由适配层补当前位置保持点。
 - 高度：`TRACK/INTERCEPT` 最低 5 米，`ATTACK` 最低 3 米；最高 50 米；XY 限制 ±1000 米。
 - `INTERCEPT/ATTACK` 至少需要两帧目标（`velocity_valid=True`）才发点；只有一帧时等待，避免把“当前位置”当成拦截点。
-- 输出 `stamp` 是发布时刻；中枢 `max_plan_delay=0.8s`，过期点会被丢弃。
+- 输出 `stamp` 是发布时刻；中枢 `max_plan_delay=0.8s`（接口规范写 0.5s），过期点会被丢弃。
 
 ### 6.3 与其它包的关系
 
@@ -406,13 +406,15 @@ src/algorithm_pkg/
 | 参数 | 默认 | 说明 |
 |---|---|---|
 | `drone_ids` | `['drone_1','drone_2','drone_3']` | 必须与中枢 `swarm_config` 一致 |
-| `v_max` | 6.0 | 己方最大速度，m/s |
+| `v_max` | 6.0 | 兜底速度，m/s |
+| `v_max_intercept` | 6.0 | INTERCEPT 速度上限，m/s |
+| `v_max_attack` | 6.0 | ATTACK 速度上限，m/s |
 | `t_go_max` | 8.0 | 最大拦截时间，s |
 | `max_age` | 1.0 | 目标最大年龄，s |
 | `target_timeout` | 0.5 | 视觉/外部源切换阈值，s |
-| `state_timeout` | 1.0 | 己方状态超时，s |
+| `ego_timeout` | 1.0 | 己方状态超时，s |
 | `default_action` | HOVER | 未收到战术指令时的模式 |
-| `max_step` | 0.0 | 0 表示不限制单帧跳变 |
+| `max_step` | 0.30 | 单帧最大跳变，m；0 表示不限制 |
 
 ---
 
@@ -436,7 +438,7 @@ src/algorithm_pkg/
 
 ## 8. 交付前验收清单
 
-在 Humble 容器里逐项打勾：
+在 Humble 容器中逐项确认：
 
 - [ ] `docker inspect` 确认工作区挂载到 `/ws`，不是空目录
 - [ ] `source /opt/ros/humble/setup.bash` 后 `python3 --version` 是 3.10
@@ -473,4 +475,4 @@ src/algorithm_pkg/
 
 ---
 
-*最后更新：2026-11-16*
+*最后更新：2026-11-19*

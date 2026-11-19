@@ -131,12 +131,12 @@ def test_normal_attack_no_solution_stays_normal(measured):
     measured(f"level={result.level}, reason={result.reason}")
 
 
-def test_center_actions_pass_through_without_fsm_change(measured):
-    """场景：动作是 HOVER，坐标由中枢生成。
+def test_hover_returns_current_position_without_fsm_change(measured):
+    """场景：动作是 HOVER，宪章要求原地保持不动。
 
     操作：调用 plan_with_degrade("HOVER", ...)。
-    输入：有效目标和己方位置。
-    预期：原样返回 P2 的 hover_center_generated，level=NORMAL；
+    输入：own=(0,0,10)，目标有效。
+    预期：point=己方当前位置，reason=hover_hold，level=NORMAL；
           FSM 级别和计数不变。
     """
     params = PlanParams()
@@ -149,13 +149,13 @@ def test_center_actions_pass_through_without_fsm_change(measured):
         target=make_target(1.0),
     )
 
-    assert result.point is None
-    assert result.reason == "hover_center_generated"
+    assert result.point == pytest.approx((0.0, 0.0, 10.0))
+    assert result.reason == "hover_hold"
     assert result.level == DegradeLevel.NORMAL.value
     assert fsm.level is DegradeLevel.NORMAL
     assert fsm.bad_frames == 0
 
-    measured(f"reason={result.reason}, fsm.level={fsm.level.value}")
+    measured(f"point={fmt_vec(result.point)}, reason={result.reason}, fsm.level={fsm.level.value}")
 
 
 def test_unknown_action_is_l3_cmd_invalid(measured):

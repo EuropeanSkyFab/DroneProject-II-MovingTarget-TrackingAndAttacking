@@ -126,7 +126,7 @@ def main() -> int:
     bogus = window(node.messages, 3.85, 4.25)
     checks.append(
         (
-            "非法指令被忽略且不崩",
+            "非法指令被忽略且节点不退出",
             len(bogus) >= 2
             and all(d.get("action") == "ATTACK" for _, _, d in bogus),
             f"count={len(bogus)}",

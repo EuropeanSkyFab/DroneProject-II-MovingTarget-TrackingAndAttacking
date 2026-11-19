@@ -176,7 +176,7 @@ def _visible_a(t: float) -> bool:
 
 
 def _target_b(t: float) -> Vec3:
-    """场景 B：目标同向远离，9 m/s，比 INTERCEPT 的 7.6 m/s 快。"""
+    """场景 B：目标同向远离，9 m/s，比己方 V_max=6.0 m/s 快。"""
     return (20.0 + 9.0 * t, 0.0, 10.0)
 
 
@@ -186,10 +186,10 @@ def _visible_b(t: float) -> bool:
 
 
 def _target_c(t: float) -> Vec3:
-    """场景 C：目标先向北 6 m/s，2.0s 后改向东 6 m/s。"""
+    """场景 C：目标先向北 4 m/s，2.0s 后改向东 4 m/s（慢于 V_max，可被 ATTACK 追上）。"""
     if t < 2.0:
-        return (60.0, 6.0 * t, 10.0)
-    return (60.0 + 6.0 * (t - 2.0), 12.0, 10.0)
+        return (30.0, 4.0 * t, 10.0)
+    return (30.0 + 4.0 * (t - 2.0), 8.0, 10.0)
 
 
 def _visible_c(t: float) -> bool:
@@ -1049,7 +1049,7 @@ def build_scenarios() -> list[dict]:
             "action": "INTERCEPT",
             "own_start": (0.0, 0.0, 10.0),
             "duration": 6.0,
-            "max_step": 0.38,  # 7.6 m/s * 0.05s
+            "max_step": 0.30,  # 6.0 m/s * 0.05s
             "target_fn": _target_b,
             "visible_fn": _visible_b,
             "ego_dropout_fn": lambda t: False,
@@ -1060,7 +1060,7 @@ def build_scenarios() -> list[dict]:
             "action": "ATTACK",
             "own_start": (0.0, 0.0, 10.0),
             "duration": 7.0,
-            "max_step": 0.62,  # 12.4 m/s * 0.05s
+            "max_step": 0.30,  # 6.0 m/s * 0.05s
             "target_fn": _target_c,
             "visible_fn": _visible_c,
             "ego_dropout_fn": _ego_dropout_c,

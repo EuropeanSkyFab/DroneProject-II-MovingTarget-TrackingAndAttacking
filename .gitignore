@@ -18,3 +18,5 @@ __pycache__/
 # 其他
 fake_data_test_command.txt
 上传指令.txt
+# 工具目录（不进仓库）
+.dsh/

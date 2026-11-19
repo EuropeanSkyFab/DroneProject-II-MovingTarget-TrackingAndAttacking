@@ -1,8 +1,0 @@
-Starting >>> algorithm_pkg
-Starting >>> center_node_pkg
-Starting >>> vision_pkg
-Finished <<< center_node_pkg [0.71s]
-Finished <<< algorithm_pkg [0.72s]
-Finished <<< vision_pkg [0.72s]
-
-Summary: 3 packages finished [0.81s]
