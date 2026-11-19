@@ -22,11 +22,15 @@ def generate_launch_description():
                 # 规划定时器频率；中枢消费是 20Hz，两者不要差太多。
                 {'publish_rate_hz': 20.0},
 
-                # 宪章《内部分工细节》V_max = 6.0 m/s：三种动作统一用 6.0。
-                # 飞控步长 0.38/0.62 m 的旧方案与宪章冲突，暂不采用。
-                {'v_max': 6.0},
-                {'v_max_intercept': 6.0},
-                {'v_max_attack': 6.0},
+                # ! 以下数值来自学长桥接模块的基准，只作理论参考，不是本机实测。
+                # ! P5 本机实测：V_max=13.00、a_max=10.13、yaw=168.6 deg/s；真机未测。
+                # ! 改动前先看 文档/P5实测记录.md。
+                {'v_max': 4.50},            # 学长 V_cruise
+                {'v_max_intercept': 7.60},  # 学长桥接 INTERCEPT 档 0.38×20
+                {'v_max_attack': 23.59},    # 学长 V_max，理论值
+                # ! a_max / yaw 同样是学长理论值，不是本机实测。
+                {'a_max': 10.82},
+                {'yaw_rate_max': 3.232349774693498},  # 185.2 deg/s
                 {'t_go_max': 8.0},
 
                 # P1 目标估计窗口；视觉 10Hz 时 1s 内通常有 5~10 帧。
@@ -45,9 +49,10 @@ def generate_launch_description():
                 {'max_alt': 50.0},
                 {'max_xy': 1000.0},
 
-                # ! 默认 0.30 = 宪章 V_max 6.0 m/s × 0.05s。
-                # ! 0 只保留为“不限幅”调试入口，联调/交付不要用。
-                {'max_step': 0.30},
+                # ! 学长理论：23.59 m/s × 0.05s。单一 max_step 不能同时表示
+                # ! 4.5 / 7.6 / 23.59 三档，per-action 拆分前不要直接交付。
+                # ! 理论值，不是本机实测。
+                {'max_step': 1.1795},
                 {'target_timeout': 0.5},
                 {'history_sec': 3.0},
 

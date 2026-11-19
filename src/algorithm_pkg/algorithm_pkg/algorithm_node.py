@@ -19,9 +19,14 @@ ROS 参数（launch 里的默认值）：
 ====================================  =========  ==========================================
 ``drone_ids``                         drone_1..3  必须与中枢 ``swarm_config`` 一致
 ``publish_rate_hz``                   20.0       规划定时器频率，Hz
-``v_max``                             6.0        宪章 V_max，m/s
-``v_max_intercept``                   6.0        INTERCEPT 速度，m/s；宪章下同为 V_max
-``v_max_attack``                      6.0        ATTACK 速度，m/s；宪章下同为 V_max
+# ! 下面是节点兜底默认值；launch 现在用学长桥接理论值：
+# ! 4.50 / 7.60 / 23.59 m/s、10.82 m/s²、3.232 rad/s（185.2°/s）。
+# ! 理论值不是本机实测，P5 实测见 文档/P5实测记录.md。
+``v_max``                             6.0        兜底；launch 用 4.50
+``v_max_intercept``                   6.0        兜底；launch 用 7.60
+``v_max_attack``                      6.0        兜底；launch 用 23.59
+``a_max``                             2.0        兜底；launch 用 10.82
+``yaw_rate_max``                      1.5708     兜底；launch 用 3.232
 ``t_go_max``                          8.0        最大拦截时间，s
 ``max_age``                           1.0        目标采样最大年龄，s
 ``max_pred_age``                      0.5        预测点最大年龄，s
@@ -125,6 +130,7 @@ class AlgorithmNode(Node):
         max_step_value = float(self.declare_parameter("max_step", 0.30).value)
         max_step = max_step_value if max_step_value > 0.0 else None
 
+        # ! launch 会覆盖成学长理论值；这里只是节点兜底，理论值不是本机实测。
         self._params = PlanParams(
             v_max=float(self.declare_parameter("v_max", 6.0).value),
             v_max_intercept=float(
@@ -132,6 +138,10 @@ class AlgorithmNode(Node):
             ),
             v_max_attack=float(
                 self.declare_parameter("v_max_attack", 6.0).value
+            ),
+            a_max=float(self.declare_parameter("a_max", 2.0).value),
+            yaw_rate_max=float(
+                self.declare_parameter("yaw_rate_max", 1.5707963267948966).value
             ),
             t_go_max=float(self.declare_parameter("t_go_max", 8.0).value),
             min_distance=float(

@@ -2,7 +2,7 @@
 
 本包计算无人机编队的规划点：接收目标位置、己方状态和战术指令，输出一个 ENU 点和动作标签，发布到 `/planning/target_pose`。本包不控制飞行器，不处理避障、姿态、油门和速度控制。
 
-当前状态：P1～P4 已完成，206 项 pytest；Jazzy 下 `colcon build` 与 `colcon test` 通过。
+当前状态：P1～P4 已完成，P5 参数化已加入，212 项 pytest（原 206 + 6 个参数用例）；Jazzy 下 `colcon build` 与 `colcon test` 通过。
 
 阅读建议：
 
@@ -117,7 +117,7 @@ P1～P4 是内部分层编号：P1 几何计算、P2 动作策略、P3 异常降
 
 约定：**TRACK 只发布目标的预测位置，不做 standoff 偏移**。原因是中枢的 TRACK 分支在水平距离小于 5 m 时会自行执行环绕（`center_node.py:604`，`TRACK_SAFE_DIST=5.0`）。若本包再减去一次安全距离，会产生双重偏移。
 
-本包不发布速度指令。TRACK 的速度由中枢按自身限幅决定。`v_max=6.0` 是兜底值，TRACK 的点不经过该参数。
+本包不发布速度指令。TRACK 的速度由中枢按自身限幅决定。`v_max` 运行值是 4.50（学长理论；代码兜底 6.0），TRACK 的点不经过该参数。
 
 ### 2.4 `INTERCEPT`
 
@@ -129,7 +129,7 @@ P1～P4 是内部分层编号：P1 几何计算、P2 动作策略、P3 异常降
 
 ### 2.5 `ATTACK`
 
-与 INTERCEPT 使用同一方程，速度上限同为 `V_max=6.0 m/s`。
+与 INTERCEPT 使用同一方程，速度上限取 `v_max_attack`，launch 为 23.59 m/s（学长理论；代码兜底 6.0）。
 
 区别只在无解时的处理：INTERCEPT 退化为尾随点，ATTACK 不退化为尾随点。原因是中枢收到 ATTACK 后会全速飞行，若本包给出目标后方的尾随点，飞行器会全速冲向目标后方，动作与意图不一致。
 
@@ -195,7 +195,7 @@ ATTACK 无解时，策略层返回 `point=None, reason=attack_no_solution`；适
 | `plan_types.py` | `PlanResult` 类型与动作分组 | 不包含业务判断 |
 | `plan_params.py` | 参数、默认值、合法性校验 | 其他模块不得硬编码参数 |
 | `algorithm_core.py` | 预测、拦截求解、边界裁剪，纯函数 | 不依赖 ROS，不包含动作策略 |
-| `launch/algorithm.launch.py` | 31 个启动参数 | 不得隐藏参数 |
+| `launch/algorithm.launch.py` | 33 个启动参数 | 不得隐藏参数 |
 
 ### ROS 依赖约束
 
@@ -209,7 +209,7 @@ grep -rn "import rclpy" src/algorithm_pkg/algorithm_pkg/
 
 `scripts/p4/` 为联调脚本，会启动 ROS 节点，不受该约束限制。
 
-该约束可直接验证：设置 `PYTHONPATH=src/algorithm_pkg` 后，`pytest` 可运行全部 206 项测试，不需要 launch，也不需要中枢节点在线。
+该约束可直接验证：设置 `PYTHONPATH=src/algorithm_pkg` 后，`pytest` 可运行全部 212 项测试，不需要 launch，也不需要中枢节点在线。
 
 ### 修改指引
 
@@ -270,10 +270,12 @@ L0 下也可能本帧没有可发布的点，例如输出约束拒绝（`guard_*
 
 | 参数 | 默认值 | 单位 | 含义 | 来源 |
 |---|---|---|---|---|
-| `v_max_intercept` | 6.0 | m/s | 拦截速度上限 | 《内部分工细节》`V_max` |
-| `v_max_attack` | 6.0 | m/s | 攻击速度上限 | 同上 |
-| `v_max` | 6.0 | m/s | 兜底速度 | 同上 |
-| `max_step` | 0.30 | m/帧 | 单帧最大跳变 | 6.0 m/s × 0.05 s；`PlanParams` 默认 `None`，0.30 为 launch 值 |
+| `v_max_intercept` | 7.60 | m/s | 拦截速度上限 | 学长桥接理论（0.38×20）；不是本机实测 |
+| `v_max_attack` | 23.59 | m/s | 攻击速度上限 | 学长桥接 `V_max`；理论值 |
+| `a_max` | 10.82 | m/s² | 最大水平加速度 | 学长桥接理论；不是本机实测 |
+| `yaw_rate_max` | 3.232 | rad/s | 最大偏航角速度 | 学长 185.2°/s；理论值 |
+| `v_max` | 4.50 | m/s | 兜底/巡航速度 | 学长 `V_cruise`；理论值 |
+| `max_step` | 1.1795 | m/帧 | 单帧最大跳变 | 学长 `V_max=23.59` × 0.05 s；单一值未拆，交付前必须拆 |
 | `max_step_recover` | 0.2 | m/帧 | 恢复第一帧的跳变上限 | 未单独标定 |
 | `t_go_max` | 8.0 | s | 最大拦截时间 | 初值，未标定 |
 | `max_age` | 1.0 | s | 目标采样最大年龄 | 初值，待视觉实测帧率后复核 |
@@ -285,9 +287,25 @@ L0 下也可能本帧没有可发布的点，例如输出约束拒绝（`guard_*
 | `min_alt` / `safe_alt` / `max_alt` | 3 / 5 / 50 | m | 高度边界 | 中枢 `plan_callback` |
 | `max_xy` | 1000 | m | 水平边界 | 中枢 `MAX_XY_DIST` |
 
-`max_step=0.30` 由 `V_max=6.0 m/s` 乘以 0.05 s 得到，同时受 P2 的 `apply_constraints` 和 P3 的输出约束限制。
+> # ! 上表的 V_max / a_max / yaw 来自学长桥接模块，只是理论参考，不是本机实测。
+> # ! P5 本机实测：默认参数 V_max 13.00；运行时注入 PX4 26/48/12 后 x500 14.82、x500_down_cam 14.69，仍到不了 23.59。
+> # ! 23.59 m/s 在本机/真机能否达到未验证，不要拿它当交付能力。
 
-历史配置：P4 联调期间曾按飞控步长将 ATTACK 配置为 12.4 m/s、`max_step=0.62`，仿真最小目标距离为 15.83 m。该配置与《内部分工细节》的 `V_max` 冲突，已回退。若团队确认飞控允许更大步长，需同步修改 `v_max_attack` 与 `max_step`。
+`max_step=1.1795` 是学长理论值 `23.59 m/s × 0.05 s`；单一 `max_step` 无法同时表示 4.5 / 7.6 / 23.59 三档，按动作拆分前不要直接交付。main 桥接的注入参数在 `.p5/main_ws/theory_bridge_params.yaml`，三档是 0.225 / 0.38 / 1.1795。
+
+历史配置：P4 曾按飞控步长用 12.4/0.62；P5 按负责人要求把 launch 改成学长理论值 4.50 / 7.60 / 23.59、10.82、185.2°/s，并标注“理论值，不是本机实测”。`PlanParams` 代码兜底仍是 6.0 / 2.0 / 90。
+
+### 理论参数注入
+
+main 的 `px4-rc.params` 和桥接默认值不改，用 `.p5/main_ws` 下的注入文件覆盖：
+
+- `theory_bridge_params.yaml`：桥接 `max_step_default/intercept/attack = 0.225 / 0.38 / 1.1795`，`max_yaw_rate_deg=185.2`。
+- `px4-rc.theory.params` + `start_px4_theory.sh`：PX4 `MPC_XY_VEL_MAX=26`、`MPC_TILTMAX_AIR=48`、`MPC_ACC_HOR_MAX=12`、`MPC_XY_CRUISE=4.5`、`MPC_YAWRAUTO_MAX=185.2`。
+- `run_p5_theory.sh`：一键拉起 PX4 + Gazebo + 桥接 + 算法 + 中枢。
+
+首次验证：桥接层注入生效，PX4 参数用 MAVSDK 运行时 set 到 26/48/12/4.5/185.2 并读回一致；但 `x500_down_cam` 实测 `V_max=14.69`、`x500` 实测 14.82，仍不到理论 23.59。说明卡点不是参数没注入，而是 main 的模型/控制器上限；main 的 README/参数表/桥接步长仍然对不上。
+
+这些值仍是学长理论值，不是本机实测；跑完要用 `dynamics_calibrator` 复核。
 
 ### 时间戳过滤
 
@@ -375,7 +393,7 @@ L0 下也可能本帧没有可发布的点，例如输出约束拒绝（`guard_*
 
 ### 5.8 mock 环境的速度上限低于配置
 
-dry bridge 的实际限幅为 10/6/3 m/s，规划配置为 6.0 m/s。标定数据按实测记录。
+dry bridge 的实际限幅为 10/6/3 m/s；规划 launch 现在按学长理论值 4.50/7.60/23.59，代码兜底 6.0。本机 P5 实测最高 14.82 m/s（运行时注入 PX4 26/48/12 后），不是 23.59。
 
 影响：mock 环境实测的 9.82/5.88/2.94 m/s 是链路能力，不代表飞行器能力，真机需重新标定。
 
@@ -389,7 +407,7 @@ ros2 launch algorithm_pkg algorithm.launch.py
 
 启动后默认 `HOVER`，每帧发布己方当前位置（`reason=hover_hold`）。收到 `/strategy/cmd` 的 `TRACK` / `INTERCEPT` / `ATTACK` 后改为发布规划点；`TAKEOFF` / `RETURN` 不发布规划点。典型顺序：先 `TAKEOFF`，再 `TRACK` 或 `INTERCEPT` / `ATTACK`，最后 `RETURN`。
 
-全部参数在 launch 文件中，共 31 个，均有注释。修改速度、边界和降级阈值应修改 launch，不应修改代码中的默认值。
+全部参数在 launch 文件中，共 33 个，均有注释。修改速度、边界和降级阈值应修改 launch，不应修改代码中的默认值。
 
 ## 接口
 
@@ -425,12 +443,12 @@ colcon test --packages-select algorithm_pkg
 colcon test-result --verbose
 ```
 
-共 206 项，按层分布：
+共 212 项，按层分布：
 
 | 层 | 文件 | 数量 |
 |---|---|---|
 | P1 几何 | `test_algorithm_core.py` | 33 |
-| P2 策略 | `test_plan_params.py`、`test_plan_policy.py`、`test_plan_replay.py` | 64 |
+| P2 策略 | `test_plan_params.py`、`test_plan_policy.py`、`test_plan_replay.py` | 70 |
 | P3 降级 | `test_validators.py`、`test_degrade_fsm.py`、`test_degrade_policy.py`、`test_safety_guard.py`、`test_recovery.py`、`test_replay_anomaly.py` | 91 |
 | P4 适配 | `test_node_adapter.py` | 13 |
 | 场景回归 | `test_scenario_p3.py` | 5 |
@@ -444,12 +462,15 @@ colcon test-result --verbose
 - [文档/课题二内部接口规范.md](../../文档/课题二内部接口规范.md)、[课题二-课题三-接口规范.md](../../文档/课题二-课题三-接口规范.md)：上下游接口。
 - [文档/内部分工细节.md](../../文档/内部分工细节.md)：团队分工与物理参数依据。
 
-## 未确认 / 待决策
+## 未确认 / 待决策（P5 更新）
 
-- 接口 C 的 `stamp`：规范第 2.1 节写“源头时间戳”，本包按发布时刻实现，与中枢 `max_plan_delay` 判断和 `mock_plan_node.py` 的时间戳刷新逻辑一致。规范措辞与 0.5/0.8 s 阈值待 main 澄清。
-- 《内部分工细节》的 `V_max=6.0 m/s` 与飞控实际能力是否一致。当前全部按 6.0 配置；若飞控允许更大步长，需要先更新团队规范，再修改参数。
-- `min_distance=0.5 m` 判断的是己方到目标的距离；ATTACK 在接近目标时会转为保持点。撞击末段是否需要豁免，待确认。
-- 输出约束第 5 步判断的是“输出点到目标”的距离，慢速目标可能被误拒（`guard_target_too_close`）。
-- `max_step_recover=0.2 m/帧` 未单独标定。
-- 真机可达速度未标定，现有数据仅覆盖 mock 链路 10/6/3 m/s。
+- 接口 C 的 `stamp`：规范写“源头时间戳”，本包仍按发布时刻。P5 实测接口 C 的 DDS 传输 p99 0.89 ms；真正的大头是规划只有约 10 Hz、出现 0.5～0.86 s 空档。0.8 s 阈值能用但没余量；按源头时间戳的 0.5 s 在 p95 就会超。规范措辞和阈值仍需 main 统一。
+- `V_max`：launch 现在按学长桥接理论值 4.50 / 7.60 / 23.59、`a_max=10.82`、`yaw=185.2°/s`；`PlanParams` 代码兜底仍是 6.0 / 2.0 / 90。理论值不是本机实测；P5 默认参数实测 `V_max=13.00`，运行时注入 PX4 26/48/12 后实测 `x500=14.82`、`x500_down_cam=14.69`。23.59 在这套仿真不可达。
+- `min_distance=0.5 m`：P5 ATTACK 固定目标最近 0.082 m，没有抽搐或过冲；暂保持 0.5。
+- 输出约束第 5 步的 `guard_target_too_close` 在 P5 ATTACK 未误拒；慢速目标风险仍在，保留。
+- `max_step_recover=0.2 m/帧`：P5 做了 L2 保持后恢复（目标 15 s 恢复），恢复窗口规划最大跳变 0.275 m，首帧按 0.2 限幅；没有 L3 后恢复，单测 `test_recovery.py` 覆盖，保留 0.2。
+- 真机可达速度：P5 数据只覆盖 Gazebo 的 `x500`/`x500_down_cam`，不是真机；V_max 14.8 是仿真模型数据，23.59 是理论值。
+- 规划频率：P5 观测到 `/planning/target_pose` 约 10 Hz（launch 写 20 Hz），原因未定位；这是 0.8 s 没余量的主因，后续要查 CPU、定时器或丢帧。
+- `a_max`、`yaw_rate_max` 已进 `PlanParams` 和 launch；launch 用学长理论 10.82 / 185.2°/s，`PlanParams` 代码兜底 2.0 / 90°/s。P5 本机实测 10.13 / 168.6 与理论值不同。
+- `max_step=1.1795` 是学长理论值；单一值不能覆盖三档，per-action 拆分前不要交付。main 桥接已用注入参数 0.225 / 0.38 / 1.1795，算法侧仍是单值。
 - `rosdep install` 未执行成功（镜像依赖齐全，源站超时）。

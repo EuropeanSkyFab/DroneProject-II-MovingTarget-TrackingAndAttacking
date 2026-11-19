@@ -1,18 +1,32 @@
 """P2 策略参数：集中所有可调参数，启动时校验。
 
-速度口径以《内部分工细节》(V2.0) 为准：最大平飞速度 ``V_max = 6.0 m/s``。
-INTERCEPT/ATTACK 的“全速”也是 6.0，不再使用 P4 联调时的 7.6/12.4。
-原因：那两档是飞控步长 0.38/0.62 m × 20 Hz 推出来的，和宪章的 V_max 冲突；
-宪章是团队最高准则，先按 6.0 统一。
+代码兜底仍是宪章 ``V_max = 6.0 m/s``、``a_max = 2.0 m/s²``、``yaw = 90°/s``，
+所以不依赖 launch 的单测也能跑。
 
-如果团队确认飞控确实允许更大步长，改这三个字段即可，不要在策略函数里写死。
+launch 现在按负责人要求改成学长桥接模块的理论基准：
+``V_cruise=4.50``、``V_intercept=7.60``、``V_max=23.59``、
+``a_max=10.82``、``yaw=185.2°/s``。这些只是理论参考，不是本机实测；
+P5 本机实测见 ``文档/P5实测记录.md``。
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from math import isfinite
+from math import isfinite, radians
 from typing import Optional
+
+# 代码兜底值：宪章 6.0 / 2.0 / 90。launch 会覆盖成下面的理论值。
+CHARTER_V_MAX = 6.0
+CHARTER_A_MAX = 2.0
+CHARTER_YAW_RATE_MAX = radians(90.0)
+
+# ! 学长桥接模块的基准，只作理论参考，不是本机实测。
+# ! P5 本机实测：V_max=13.00、a_max=10.13、yaw=168.6 deg/s、R_min≈1.48 m。
+THEORY_V_CRUISE = 4.50
+THEORY_V_INTERCEPT = 7.60
+THEORY_V_MAX = 23.59
+THEORY_A_MAX = 10.82
+THEORY_YAW_RATE_MAX = radians(185.2)
 
 
 @dataclass(frozen=True)
@@ -20,9 +34,17 @@ class PlanParams:
     """P2 一帧规划需要的全部参数。
 
     Attributes:
-        v_max: 兜底速度上限，米/秒，按宪章 V_max=6.0。
-        v_max_intercept: INTERCEPT 速度上限，米/秒；宪章下同为 6.0。
-        v_max_attack: ATTACK 速度上限，米/秒；宪章下同为 6.0。
+        v_max: 兜底速度上限，米/秒；代码兜底 6.0，launch 用学长理论 4.50。
+        v_max_intercept: INTERCEPT 速度上限，米/秒；代码兜底 6.0，
+            launch 用学长理论 7.60。
+        v_max_attack: ATTACK 速度上限，米/秒；代码兜底 6.0，
+            launch 用学长理论 23.59。
+        a_max: 最大水平加速度，米/秒²；代码兜底 2.0，
+            launch 用学长理论 10.82。当前只做参数出口，
+            冲突三（高速拦截）再参与求解，不要在 algorithm_core 里写死。
+        yaw_rate_max: 最大偏航角速度，弧度/秒；代码兜底 90°/s，
+            launch 用学长理论 185.2°/s。当前只做参数出口，
+            转弯半径逻辑落地时使用。
         t_go_max: 最长允许拦截时间，秒；超过认为追不上。
         min_distance: 目标太近时不出点，米。
         d_tail: INTERCEPT 追不上时，尾随点距目标多远，米。
@@ -55,9 +77,12 @@ class PlanParams:
             输出护栏按模式决定。
     """
 
-    v_max: float = 6.0
-    v_max_intercept: float = 6.0
-    v_max_attack: float = 6.0
+    # ! 代码兜底仍是宪章值；launch 现在用学长理论值。理论值不是本机实测。
+    v_max: float = CHARTER_V_MAX
+    v_max_intercept: float = CHARTER_V_MAX
+    v_max_attack: float = CHARTER_V_MAX
+    a_max: float = CHARTER_A_MAX
+    yaw_rate_max: float = CHARTER_YAW_RATE_MAX
     t_go_max: float = 8.0
     min_distance: float = 0.5
     d_tail: float = 4.0
@@ -93,6 +118,10 @@ class PlanParams:
             raise ValueError("v_max_intercept must be positive")
         if not isfinite(self.v_max_attack) or self.v_max_attack <= 0.0:
             raise ValueError("v_max_attack must be positive")
+        if not isfinite(self.a_max) or self.a_max <= 0.0:
+            raise ValueError("a_max must be positive")
+        if not isfinite(self.yaw_rate_max) or self.yaw_rate_max <= 0.0:
+            raise ValueError("yaw_rate_max must be positive")
         if not isfinite(self.t_go_max) or self.t_go_max <= 0.0:
             raise ValueError("t_go_max must be positive")
         if not isfinite(self.min_distance) or self.min_distance < 0.0:

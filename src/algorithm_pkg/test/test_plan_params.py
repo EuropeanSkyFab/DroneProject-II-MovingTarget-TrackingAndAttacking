@@ -67,6 +67,25 @@ def test_v_max_for_is_case_and_space_insensitive(measured):
     measured(f"v_max_for(' intercept ')={params.v_max_for(' intercept '):.1f}")
 
 
+def test_charter_a_max_and_yaw_rate_defaults(measured):
+    """场景：a_max / yaw_rate 只从宪章常量取默认值。
+
+    操作：构造 PlanParams()，读取 a_max 和 yaw_rate_max。
+    输入：默认参数。
+    预期：a_max=2.0 m/s²，yaw_rate_max=pi/2 rad/s；
+          学长桥接模块的 10.82 m/s²、185.2 deg/s 不进入默认值。
+    """
+    params = PlanParams()
+
+    assert params.a_max == pytest.approx(2.0)
+    assert params.yaw_rate_max == pytest.approx(math.pi / 2.0)
+
+    measured(
+        f"a_max={params.a_max:.1f} m/s^2, "
+        f"yaw_rate_max={params.yaw_rate_max:.3f} rad/s"
+    )
+
+
 def test_custom_params_are_kept(measured):
     """场景：联调时想临时改速度和最大预测年龄。
 
@@ -141,6 +160,11 @@ def test_max_step_none_means_no_limit(measured):
         {"min_distance": -1.0},
         {"d_tail": -1.0},
         {"max_xy": 0.0},
+        {"a_max": 0.0},
+        {"a_max": -1.0},
+        {"a_max": math.nan},
+        {"yaw_rate_max": 0.0},
+        {"yaw_rate_max": math.inf},
         {"max_pred_age": 0.0},
         {"max_step": 0.0},
         {"max_alt": 4.0},
