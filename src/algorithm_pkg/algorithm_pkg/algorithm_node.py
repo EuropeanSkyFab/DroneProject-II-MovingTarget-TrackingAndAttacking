@@ -10,7 +10,7 @@
 发布：
 
 - ``/planning/target_pose``（``std_msgs/String`` JSON）：``drone_id``、``stamp``、
-  ``x``、``y``、``z``、``action``；``stamp`` 是发布时刻的 ROS clock 秒数。
+  ``x``、``y``、``z``、``action``；``stamp`` 是该帧规划所用数据（目标采样或己方状态）的源头时刻，没有来源时回落发布时刻。
 
 ROS 参数（launch 里的默认值）：
 
@@ -19,14 +19,14 @@ ROS 参数（launch 里的默认值）：
 ====================================  =========  ==========================================
 ``drone_ids``                         drone_1..3  必须与中枢 ``swarm_config`` 一致
 ``publish_rate_hz``                   20.0       规划定时器频率，Hz
-# ! 下面是节点兜底默认值；launch 现在用学长桥接理论值：
-# ! 4.50 / 7.60 / 23.59 m/s、10.82 m/s²、3.232 rad/s（185.2°/s）。
-# ! 理论值不是本机实测，P5 实测见 文档/P5实测记录.md。
+# ! 下面是节点兜底默认值；launch 现在用 P5 本机实测收口值：
+# ! 4.50 / 7.60 / 14.80 m/s、9.79 m/s²、3.009 rad/s（172.4°/s）。
+# ! 理论值不是本机实测，P5 实测见 文档/算法测试基本方法.md 第 8 章。
 ``v_max``                             6.0        兜底；launch 用 4.50
 ``v_max_intercept``                   6.0        兜底；launch 用 7.60
-``v_max_attack``                      6.0        兜底；launch 用 23.59
-``a_max``                             2.0        兜底；launch 用 10.82
-``yaw_rate_max``                      1.5708     兜底；launch 用 3.232
+``v_max_attack``                      6.0        兜底；launch 用 14.80
+``a_max``                             2.0        兜底；launch 用 9.79
+``yaw_rate_max``                      1.5708     兜底；launch 用 3.009
 ``t_go_max``                          8.0        最大拦截时间，s
 ``max_age``                           1.0        目标采样最大年龄，s
 ``max_pred_age``                      0.5        预测点最大年龄，s
@@ -37,7 +37,7 @@ ROS 参数（launch 里的默认值）：
 ``safe_alt``                          5.0        TRACK/INTERCEPT 最低高度，m
 ``max_alt``                           50.0       最高高度，m
 ``max_xy``                            1000.0     水平边界，m
-``max_step``                          0.30       单帧最大跳变，m；0 表示不限制
+``max_step``                          0.30       单帧最大跳变，m；launch 用 0.74；0 表示不限制
 ``target_timeout``                    0.5        视觉/外部源切换阈值，s
 ``history_sec``                       3.0        目标采样窗口，s
 ``default_action``                    HOVER      未收到战术指令时的模式
@@ -396,7 +396,7 @@ class AlgorithmNode(Node):
             self._publish_plan(drone_id, now, result)
 
     def _publish_plan(self, drone_id: str, now: float, result) -> None:
-        """发布接口 C；``stamp`` 固定用发布时刻。"""
+        """发布接口 C；``stamp`` 用该帧规划所用数据的源头时刻。"""
         data = payload(drone_id, now, result)
         self._plan_pubs[drone_id].publish(
             String(data=json.dumps(data, ensure_ascii=False))

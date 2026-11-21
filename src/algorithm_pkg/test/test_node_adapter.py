@@ -176,10 +176,10 @@ def test_choose_target_falls_back_to_external(measured):
     assert state.position[0] == pytest.approx(30.0)
 
 
-def test_payload_uses_publish_time_stamp(measured):
-    """场景：目标 stamp=100.0，发布时刻 now=123.456。
+def test_payload_falls_back_to_now_without_source(measured):
+    """场景：结果没有 source_stamp（兼容旧调用），发布时刻 now=123.456。
 
-    预期：接口 C 的 stamp 是 123.456，不是目标时间戳。
+    预期：接口 C 的 stamp 回落到 123.456，不抛异常。
     """
     result = PlanResult(
         action="TRACK",
@@ -194,6 +194,41 @@ def test_payload_uses_publish_time_stamp(measured):
     assert data["stamp"] == pytest.approx(123.456)
     assert data["x"] == pytest.approx(1.0)
     assert data["drone_id"] == "drone_1"
+
+
+def test_plan_carries_target_source_stamp(measured):
+    """场景：目标源头 stamp=100.0，规划在 now=100.05 发布。
+
+    预期：结果的 source_stamp 和接口 C 的 stamp 都是 100.0，
+    不是发布时刻 100.05。规范第 5 节要求“源头时间戳”。
+    """
+    params = _params()
+    runtime = DroneRuntime.create(params)
+    target = _target(now=100.0, position=(20.0, 0.0, 10.0))
+    result = plan_drone(
+        runtime, "TRACK", (0.0, 0.0, 8.0), target, 100.0, 100.05, params
+    )
+    assert should_publish(result)
+    measured(f"source_stamp={result.source_stamp}")
+    assert result.source_stamp == pytest.approx(100.0)
+    data = payload("drone_1", 100.05, result)
+    assert data["stamp"] == pytest.approx(100.0)
+
+
+def test_hover_uses_ego_source_stamp(measured):
+    """场景：HOVER 不发目标点，发己方当前位置。
+
+    预期：source_stamp 取己方状态的源头时刻，不是发布时刻。
+    """
+    params = _params()
+    runtime = DroneRuntime.create(params)
+    result = plan_drone(
+        runtime, "HOVER", (1.0, 2.0, 8.0), None, 99.0, 100.0, params
+    )
+    assert should_publish(result)
+    measured(f"source_stamp={result.source_stamp}")
+    assert result.source_stamp == pytest.approx(99.0)
+    assert payload("drone_1", 100.0, result)["stamp"] == pytest.approx(99.0)
 
 
 def test_payload_rejects_missing_point(measured):

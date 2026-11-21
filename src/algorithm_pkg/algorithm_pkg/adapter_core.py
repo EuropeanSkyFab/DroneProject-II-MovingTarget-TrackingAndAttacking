@@ -40,7 +40,7 @@ from algorithm_pkg.algorithm_core import (
 from algorithm_pkg.degrade_fsm import DegradeFSM
 from algorithm_pkg.degrade_policy import plan_with_degrade
 from algorithm_pkg.plan_params import PlanParams
-from algorithm_pkg.plan_types import PlanResult
+from algorithm_pkg.plan_types import PLAN_ACTIONS, PlanResult
 from algorithm_pkg.safety_guard import apply_safety_guard
 
 # ROS 时间戳比较容差：秒。与 P3 validators 的 1e-6 保持一致。
@@ -322,8 +322,59 @@ def plan_drone(
         if held is not None:
             result = held
 
+    result = _attach_source_stamp(
+        result, action, target, ego_stamp, runtime.prev_result
+    )
     runtime.prev_result = result
     return result
+
+
+def _attach_source_stamp(
+    result: PlanResult,
+    action: object,
+    target: Optional[TargetState],
+    ego_stamp: Optional[float],
+    prev_result: Optional[PlanResult],
+) -> PlanResult:
+    """给要发布的点补上“这帧规划用的源头时刻”。
+
+    规则与接口语义对应：
+
+    - 正常跟踪/拦截/攻击：用目标采样的 ``stamp``；
+    - L1 外推：仍用参与外推的最新目标采样 ``stamp``；
+    - L2 保持 / L1 几何回退：沿用上一有效点的 ``source_stamp``；
+      保持点是己方当前位置时用己方状态时刻；
+    - HOVER / ATTACK 无解保持点：用己方状态时刻。
+
+    没有可用来源时保持 ``None``，由 ``payload`` 回落到发布时刻。
+    """
+    if result.point is None:
+        return result
+
+    action_name = normalize_action(action)
+    reason = result.reason
+    source: Optional[float] = None
+
+    hold_reason = reason.startswith("hold_") or result.level == "HOLDING"
+    if reason == ATTACK_HOLD_REASON:
+        source = ego_stamp
+    elif hold_reason:
+        if reason.startswith("hold_current_ego"):
+            source = ego_stamp
+        elif prev_result is not None and prev_result.source_stamp is not None:
+            source = prev_result.source_stamp
+        elif target is not None:
+            source = target.stamp
+        else:
+            source = ego_stamp
+    elif action_name in PLAN_ACTIONS and target is not None:
+        source = target.stamp
+    else:
+        source = ego_stamp
+
+    if source is None or not isfinite(source) or source <= 0.0:
+        return result
+    return replace(result, source_stamp=float(source))
 
 
 def should_publish(result: PlanResult) -> bool:
@@ -334,12 +385,12 @@ def should_publish(result: PlanResult) -> bool:
 def payload(drone_id: str, now: float, result: PlanResult) -> dict:
     """把 ``PlanResult`` 变成接口 C 的 JSON 字典。
 
-    ``stamp`` 固定用调用方传入的发布时刻 ``now``，不是目标消息的
-    ``header.stamp``；目标时间戳只用于 P1/P3 的年龄判断。
+    ``stamp`` 优先用 ``result.source_stamp``（规范第 5 节要求的源头
+    时间戳）；结果没有来源时刻时回落到发布时刻 ``now``，兼容旧调用。
 
     Args:
         drone_id: 例如 ``"drone_1"``。
-        now: 发布时刻的 ROS 时钟，秒。
+        now: 发布时刻的 ROS 时钟，秒；只在没有源头时刻时使用。
         result: 已通过护栏、``point`` 非空的结果。
 
     Returns:
@@ -349,9 +400,10 @@ def payload(drone_id: str, now: float, result: PlanResult) -> dict:
     if point is None:
         raise ValueError("payload() 需要 result.point 非空")
 
+    stamp = result.source_stamp if result.source_stamp is not None else now
     return {
         "drone_id": drone_id,
-        "stamp": float(now),
+        "stamp": float(stamp),
         "x": float(point[0]),
         "y": float(point[1]),
         "z": float(point[2]),

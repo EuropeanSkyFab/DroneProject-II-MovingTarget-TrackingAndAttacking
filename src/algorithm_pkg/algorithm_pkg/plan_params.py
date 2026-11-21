@@ -3,10 +3,11 @@
 代码兜底仍是宪章 ``V_max = 6.0 m/s``、``a_max = 2.0 m/s²``、``yaw = 90°/s``，
 所以不依赖 launch 的单测也能跑。
 
-launch 现在按负责人要求改成学长桥接模块的理论基准：
-``V_cruise=4.50``、``V_intercept=7.60``、``V_max=23.59``、
-``a_max=10.82``、``yaw=185.2°/s``。这些只是理论参考，不是本机实测；
-P5 本机实测见 ``文档/P5实测记录.md``。
+launch 按 P5 本机实测能力收口（2026-11-20，``x500_down_cam``）：
+``V_cruise=4.50``（实测 5.49，保守取值）、``V_intercept=7.60``、
+``V_max=14.80``（实测 14.69）、``a_max=9.79``、``yaw=172.4°/s``。
+学长理论值 ``23.59 / 10.82 / 185.2`` 保留为常量只作参考，本仿真不可达。
+P5 实测见 ``文档/算法测试基本方法.md`` 第 8 章。
 """
 
 from __future__ import annotations
@@ -15,13 +16,14 @@ from dataclasses import dataclass
 from math import isfinite, radians
 from typing import Optional
 
-# 代码兜底值：宪章 6.0 / 2.0 / 90。launch 会覆盖成下面的理论值。
+# 代码兜底值：宪章 6.0 / 2.0 / 90。launch 会覆盖成 P5 实测收口值。
 CHARTER_V_MAX = 6.0
 CHARTER_A_MAX = 2.0
 CHARTER_YAW_RATE_MAX = radians(90.0)
 
 # ! 学长桥接模块的基准，只作理论参考，不是本机实测。
-# ! P5 本机实测：V_max=13.00、a_max=10.13、yaw=168.6 deg/s、R_min≈1.48 m。
+# ! P5 最终实测（x500_down_cam）：V_max=14.69、a_max=9.79、yaw=172.4 deg/s、R_min≈3.03 m。
+# ! 理论 23.59 在本仿真不可达，只保留常量作对照。
 THEORY_V_CRUISE = 4.50
 THEORY_V_INTERCEPT = 7.60
 THEORY_V_MAX = 23.59
@@ -36,14 +38,14 @@ class PlanParams:
     Attributes:
         v_max: 兜底速度上限，米/秒；代码兜底 6.0，launch 用学长理论 4.50。
         v_max_intercept: INTERCEPT 速度上限，米/秒；代码兜底 6.0，
-            launch 用学长理论 7.60。
+            launch 用 7.60（桥接 INTERCEPT 档 0.38×20）。
         v_max_attack: ATTACK 速度上限，米/秒；代码兜底 6.0，
-            launch 用学长理论 23.59。
+            launch 用 P5 实测收口 14.80（理论 23.59 不可达，仅注释参考）。
         a_max: 最大水平加速度，米/秒²；代码兜底 2.0，
-            launch 用学长理论 10.82。当前只做参数出口，
+            launch 用 P5 实测 9.79。当前只做参数出口，
             冲突三（高速拦截）再参与求解，不要在 algorithm_core 里写死。
         yaw_rate_max: 最大偏航角速度，弧度/秒；代码兜底 90°/s，
-            launch 用学长理论 185.2°/s。当前只做参数出口，
+            launch 用 P5 实测 172.4°/s。当前只做参数出口，
             转弯半径逻辑落地时使用。
         t_go_max: 最长允许拦截时间，秒；超过认为追不上。
         min_distance: 目标太近时不出点，米。

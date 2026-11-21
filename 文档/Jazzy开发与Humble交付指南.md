@@ -256,6 +256,27 @@ python3 mock_nodes/launch_control.py
 3. 检查 `echo $DISPLAY`、`ls /tmp/.X11-unix`；
 4. WSLg 下 `DISPLAY` 通常是 `:0`，不要改成 `localhost:0`。
 
+这里的 GUI 是 mock 联调控制台。Gazebo 3D GUI 已放弃，见 3.5。
+
+### 3.5 P5 SITL（PX4 + Gazebo Harmonic）
+
+P5 的物理仿真在 `p5_sitl` 容器里，不混用主机的 Humble/Jazzy 工作区。依赖：Humble、Gazebo Harmonic 8.15、PX4 v1.17、uXRCE-DDS Agent 2.4.3。PX4 源码和编译产物在 `.p5/`，已 git ignore，不占 `/`。
+
+启动整栈：
+
+```bash
+cd .p5/main_ws
+./run_p5_theory.sh
+```
+
+测试启停用 `.p5/p5_stack.sh start|stop`。理论参数注入三处：
+
+- `px4_runtime_inject.py`：MAVSDK 在运行时改 PX4 参数，不改 main 文件；
+- `theory_bridge_params.yaml`：桥接三档 `max_step`，最终 0.225 / 0.38 / 0.74；
+- `algorithm.launch.py`：算法参数，最终 4.50 / 7.60 / 14.80。
+
+理论值只作参考；本仿真 V_max 上限约 14.8 m/s，23.59 不可达。3D GUI 已放弃（驱动问题），观察和汇报用 2D 图表。测试数据、四步收口和场景报告见 `文档/算法测试基本方法.md` 第 8～10 章。
+
 ---
 
 ## 4. 长期方案：自定义 Humble 镜像

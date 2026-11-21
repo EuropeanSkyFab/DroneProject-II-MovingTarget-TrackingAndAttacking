@@ -60,6 +60,9 @@ class PlanResult:
             保持为元组，保证结果不可变、可安全跨线程传递。
         output_stamp: 护栏确认后的发布时刻；P3 不生成 ROS 时间，
             只是把 ``now`` 和上一帧 stamp 比较后给出单调递增的值。
+        source_stamp: 本帧规划实际使用的源头时刻（目标采样或己方状态）；
+            接口 C 的 ``stamp`` 用它，对应规范“源头时间戳”。``None``
+            表示调用方没有提供，发布层回落到发布时刻。
         recovered_from: 本帧仍处于恢复期时，记录从哪个降级级别恢复。
         recovery_frames: 恢复期已经过的帧数；非恢复期为 ``None``。
     """
@@ -77,6 +80,7 @@ class PlanResult:
     output_stamp: Optional[float] = None
     recovered_from: Optional[str] = None
     recovery_frames: Optional[int] = None
+    source_stamp: Optional[float] = None
 
     @property
     def should_publish(self) -> bool:
