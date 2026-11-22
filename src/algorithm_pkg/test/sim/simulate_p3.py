@@ -15,7 +15,7 @@
 
 运行：
     PYTHONPATH=src/algorithm_pkg /usr/bin/python3 \
-        src/algorithm_pkg/test/simulate_p3.py
+        src/algorithm_pkg/test/sim/simulate_p3.py
 """
 
 from __future__ import annotations

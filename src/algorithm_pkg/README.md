@@ -2,7 +2,7 @@
 
 本包计算无人机编队的规划点：接收目标位置、己方状态和战术指令，输出一个 ENU 点和动作标签，发布到 `/planning/target_pose`。本包不控制飞行器，不处理避障、姿态、油门和速度控制。
 
-当前状态：P1～P4 已完成，P5 参数化与收口已加入，P6 已把 a_max/R_min 的动力学可达性判定接入 INTERCEPT，并在容器内四场景复跑通过；227 项 pytest（P5 的 214 + P6 的 5 个动力学用例 + 8 个场景定义用例）。Jazzy 下 `colcon build` 与 `colcon test` 通过。
+当前状态：P1～P4 已完成，P5 参数化与收口已加入，P6 已把 a_max/R_min 的动力学可达性判定接入 INTERCEPT，并在容器内四场景复跑通过；235 项 pytest（unit 214 + scenario 15 + sim 6）。Jazzy 下 `colcon build` 与 `colcon test` 通过。
 
 阅读建议：
 
@@ -232,7 +232,7 @@ grep -rn "import rclpy" src/algorithm_pkg/algorithm_pkg/
 
 `scripts/p4/` 为联调脚本，会启动 ROS 节点，不受该约束限制。
 
-该约束可直接验证：设置 `PYTHONPATH=src/algorithm_pkg` 后，`pytest` 可运行全部 227 项测试，不需要 launch，也不需要中枢节点在线。
+该约束可直接验证：设置 `PYTHONPATH=src/algorithm_pkg` 后，`pytest` 可运行全部 235 项测试，不需要 launch，也不需要中枢节点在线。
 
 ### 修改指引
 
@@ -466,16 +466,18 @@ colcon test --packages-select algorithm_pkg
 colcon test-result --verbose
 ```
 
-共 227 项，按层分布：
+共 235 项，按层分布：
 
-| 层 | 文件 | 数量 |
+| 层 | 目录/文件 | 数量 |
 |---|---|---|
-| P1 几何 | `test_algorithm_core.py` | 38 |
-| P2 策略 | `test_plan_params.py`、`test_plan_policy.py`、`test_plan_replay.py` | 70 |
-| P3 降级 | `test_validators.py`、`test_degrade_fsm.py`、`test_degrade_policy.py`、`test_safety_guard.py`、`test_recovery.py`、`test_replay_anomaly.py` | 91 |
-| P4 适配 | `test_node_adapter.py` | 15 |
-| 场景回归 | `test_scenario_p3.py` | 5 |
-| 场景定义 | `test_scenario_defs.py` | 8 |
+| P1 几何 | `test/unit/test_algorithm_core.py` | 38 |
+| P2 策略 | `test/unit/` 的 params/policy/replay | 70 |
+| P3 降级 | `test/unit/` 的 validators/fsm/policy/guard/recovery | 91 |
+| P4 适配 | `test/unit/test_node_adapter.py` | 15 |
+| 情景回归 | `test/scenario/`（7 行为 + 8 定义） | 15 |
+| 多帧仿真 | `test/sim/`（1 多帧 + 5 legacy P3） | 6 |
+
+情景与多帧测试通过 `--scenario-chart-dir` 输出证据图；unit 测试不加载 matplotlib。
 
 测试方法、单帧回放、场景仿真的用法见 [文档/算法测试基本方法.md](../../文档/算法测试基本方法.md)。
 
