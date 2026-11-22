@@ -71,45 +71,142 @@ def camera_mount_matrix(roll=0.0, pitch=0.0, yaw=0.0):
     return euler_to_matrix(roll, pitch, yaw) @ base
 
 
+def _unknown_cov(unknown_var=1e6):
+    """返回“位置未知、姿态无意义”的 6x6 协方差（行优先，PoseWithCovarianceStamped 顺序）。"""
+    cov = np.zeros((6, 6))
+    cov[0, 0] = cov[1, 1] = cov[2, 2] = unknown_var
+    cov[3, 3] = cov[4, 4] = cov[5, 5] = 1.0
+    return cov
+
+
+def pixel_to_world_cov(u, v, camera_info_k, drone_position, drone_quaternion,
+                       R_bc, ground_z=0.0, sigma_px=2.0, unknown_var=1e6):
+    """
+    把像素坐标反投影到世界 ENU 系，并附带位置不确定度（协方差）。
+
+    与 pixel_to_world 的区别：
+      - 定位误差会反映到协方差：目标越远、射线越贴近地面（|dz| 越小），位置误差越大。
+      - 当射线朝天/平行地面、无法与地面求交时，不再返回 None，而是返回
+        valid=False 的高不确定度结果（位置退化为相机原点，协方差为 unknown_var），
+        由下游根据协方差自行取舍。
+
+    参数：
+        u, v              : 像素坐标（列、行）
+        camera_info_k     : CameraInfo.k，9 元素内参矩阵 [fx,0,cx, 0,fy,cy, 0,0,1]
+        drone_position    : (px, py, pz) 无人机在 ENU 世界系的位置
+        drone_quaternion  : (qx, qy, qz, qw) 无人机姿态（ENU 世界系）
+        R_bc              : 相机安装旋转矩阵（见 camera_mount_matrix）
+        ground_z          : 目标所处平面高度（默认地面 0.0）
+        sigma_px          : 像素检测不确定度（像素），用于估计角度误差
+        unknown_var       : 位置不可得时回填的协方差方差值
+
+    返回：
+        (position, covariance, valid)
+        position   : (x, y, z) 世界系坐标；valid=False 时退化为相机原点占位
+        covariance : 6x6 行优先矩阵（顺序 x,y,z,roll,pitch,yaw）
+        valid      : 是否与地面平面成功求交（False 表示距离不可得，仅有方位）
+    """
+    k = camera_info_k
+    fx, fy, cx, cy = k[0], k[4], k[2], k[5]
+
+    # 内参无效：连射线方向都算不出，返回全未知
+    if fx <= 1e-9 or fy <= 1e-9:
+        return tuple(drone_position), _unknown_cov(unknown_var), False
+
+    # 1) 相机系射线（归一化平面）
+    d_cam = np.array([(u - cx) / fx, (v - cy) / fy, 1.0])
+
+    # 2) 相机系 -> 世界系（单位化，便于后续求距离）
+    R_wb = quat_to_matrix(*drone_quaternion)
+    d_world = R_wb @ (R_bc @ d_cam)
+    d_norm = np.linalg.norm(d_world)
+    if d_norm < 1e-12:
+        return tuple(drone_position), _unknown_cov(unknown_var), False
+    d_world = d_world / d_norm
+
+    p0 = np.array(drone_position, dtype=float)
+    dz = d_world[2]
+
+    # 3) 与平面 z = ground_z 求交： p0 + t*d_world 的 z 分量等于 ground_z
+    if dz >= -1e-9:
+        # 射线朝上或平行地面，距离不可得：仅方位有效，位置退化
+        return tuple(p0), _unknown_cov(unknown_var), False
+    t = (ground_z - p0[2]) / dz
+    if t <= 0.0:
+        # 交点在相机身后，无物理意义
+        return tuple(p0), _unknown_cov(unknown_var), False
+
+    p = p0 + t * d_world
+    if not np.all(np.isfinite(p)):
+        return tuple(p0), _unknown_cov(unknown_var), False
+
+    # 4) 位置不确定度估计
+    #    角度不确定度 sigma_angle = sigma_px / f；地面点误差约 sigma_angle * t。
+    #    距离 t 越大、射线越贴地（|dz| 越小导致 t 越大），误差越大。
+    f_avg = 0.5 * (fx + fy)
+    sigma_angle = sigma_px / f_avg
+    var_xy = (sigma_angle * t) ** 2
+    var_xy = min(var_xy, unknown_var)  # 防溢出
+
+    cov = np.zeros((6, 6))
+    cov[0, 0] = var_xy
+    cov[1, 1] = var_xy
+    cov[2, 2] = 0.01  # z 被约束在地面平面上，近似确定
+    cov[3, 3] = cov[4, 4] = cov[5, 5] = 1.0  # 点目标姿态无意义
+
+    return (float(p[0]), float(p[1]), float(p[2])), cov, True
+
+
+def pixel_size_to_world(u, v, w_px, camera_info_k, drone_position, drone_quaternion,
+                        R_bc, target_real_width):
+    """
+    已知目标真实宽度时的单目测距定位（不依赖地面平面假设，空中目标可用）。
+
+    解决规划组反馈的问题：地面投影法在目标不在地面（或射线近水平）时距离算不出来。
+    本函数利用针孔模型的相似三角形关系直接解算距离：
+        distance = fx * target_real_width / w_px
+    然后沿像素射线前进该距离得到目标世界坐标：
+        point = camera_pos + distance * d_world
+
+    参数：
+        u, v              : 目标中心像素坐标
+        w_px              : 目标在图像中的像素宽度（包围盒宽）
+        target_real_width : 目标真实宽度（米），需事先标定/约定
+        其余参数同 pixel_to_world
+
+    返回 (x, y, z) 世界系坐标；参数无效（w_px<=0、fx 无效、宽度未设置）返回 None。
+    """
+    if target_real_width <= 0.0 or w_px <= 0.0:
+        return None
+    k = camera_info_k
+    fx, fy, cx, cy = k[0], k[4], k[2], k[5]
+    if fx <= 1e-9 or fy <= 1e-9:
+        return None
+
+    d_cam = np.array([(u - cx) / fx, (v - cy) / fy, 1.0])
+    R_wb = quat_to_matrix(*drone_quaternion)
+    d_world = R_wb @ (R_bc @ d_cam)
+    d_norm = np.linalg.norm(d_world)
+    if d_norm < 1e-12:
+        return None
+    d_world = d_world / d_norm
+
+    distance = fx * target_real_width / w_px
+    p = np.array(drone_position, dtype=float) + distance * d_world
+    if not np.all(np.isfinite(p)):
+        return None
+    return (float(p[0]), float(p[1]), float(p[2]))
+
+
 def pixel_to_world(u, v, camera_info_k, drone_position, drone_quaternion,
                    R_bc, ground_z=0.0):
     """
     把像素坐标反投影到世界 ENU 系（与地面 z=ground_z 平面求交）。
 
-    参数：
-        u, v              : 像素坐标（列、行）
-        camera_info_k     : CameraInfo.k，9 元素内参矩阵 [fx,0,cx, 0,fy,cy, 0,0,1]
-        drone_position    : (px, py, pz) 无人机在 ENU 世界系的位置（相机近似与机体重合）
-        drone_quaternion  : (qx, qy, qz, qw) 无人机姿态（ENU 世界系）
-        R_bc              : 相机安装旋转矩阵（见 camera_mount_matrix）
-        ground_z          : 目标所处平面的高度（默认地面 0.0；若打靶机在固定高度飞行可改）
-
-    返回：
-        (x, y, z) 世界系坐标；若无法求交（射线朝天、平行于地面、内参无效等）返回 None。
+    返回 (x, y, z) 世界系坐标；若无法求交（射线朝天、平行于地面、内参无效等）返回 None。
+    如需附带位置不确定度，请使用 pixel_to_world_cov。
     """
-    k = camera_info_k
-    fx, fy, cx, cy = k[0], k[4], k[2], k[5]
-    if fx <= 1e-9 or fy <= 1e-9:
-        return None  # CameraInfo 还没收到有效内参
-
-    # 1) 相机系射线（归一化平面）
-    d_cam = np.array([(u - cx) / fx, (v - cy) / fy, 1.0])
-
-    # 2) 相机系 -> 世界系
-    R_wb = quat_to_matrix(*drone_quaternion)
-    d_world = R_wb @ (R_bc @ d_cam)
-
-    dz = d_world[2]
-    if dz >= -1e-9:
-        return None  # 射线朝上或与地面平行，永远打不到地面
-
-    # 3) 与平面 z = ground_z 求交： p0 + t*d 的 z 分量等于 ground_z
-    p0 = np.array(drone_position, dtype=float)
-    t = (ground_z - p0[2]) / dz
-    if t <= 0.0:
-        return None  # 交点在相机身后，无物理意义
-
-    p = p0 + t * d_world
-    if not np.all(np.isfinite(p)):
-        return None
-    return float(p[0]), float(p[1]), float(p[2])
+    pos, _cov, valid = pixel_to_world_cov(
+        u, v, camera_info_k, drone_position, drone_quaternion, R_bc,
+        ground_z=ground_z)
+    return pos if valid else None

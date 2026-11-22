@@ -59,6 +59,31 @@ class ColorBlobDetector:
         all_hits = self.detect_all(bgr_image)
         return all_hits[0] if all_hits else None
 
+    def detect_with_size(self, bgr_image):
+        """
+        返回最大色块的 (u, v, w_px)：质心 + 包围盒像素宽度。
+        w_px 用于"已知目标真实宽度"的单目测距（pixel_size_to_world）。
+        """
+        hsv = cv2.cvtColor(bgr_image, cv2.COLOR_BGR2HSV)
+        mask = cv2.inRange(hsv, self.lower1, self.upper1)
+        mask |= cv2.inRange(hsv, self.lower2, self.upper2)
+        mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, self._kernel)
+        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, self._kernel)
+
+        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        best, best_area = None, self.min_area
+        for c in contours:
+            area = cv2.contourArea(c)
+            if area < best_area:
+                continue
+            m = cv2.moments(c)
+            if abs(m["m00"]) < 1e-9:
+                continue
+            _x, _y, w, _h = cv2.boundingRect(c)
+            best = (m["m10"] / m["m00"], m["m01"] / m["m00"], float(w))
+            best_area = area
+        return best
+
 
 class YoloDetector:
     """YOLOv8 检测：取置信度最高且类别匹配的目标框中心。未安装 ultralytics 时优雅降级。"""
@@ -101,3 +126,26 @@ class YoloDetector:
         """返回置信度最高的目标框中心（当前单目标业务用）。"""
         all_hits = self.detect_all(bgr_image)
         return all_hits[0] if all_hits else None
+
+    def detect_with_size(self, bgr_image):
+        """
+        返回置信度最高目标框的 (u, v, w_px)：中心 + 像素宽度。
+        w_px 用于"已知目标真实宽度"的单目测距（pixel_size_to_world）。
+        """
+        if self._model is None:
+            return None
+        results = self._model.predict(bgr_image, verbose=False, conf=self.conf_thres)
+        if not results or results[0].boxes is None or len(results[0].boxes) == 0:
+            return None
+        boxes = results[0].boxes
+        best, best_conf = None, -1.0
+        for i in range(len(boxes)):
+            cls_id = int(boxes.cls[i].item())
+            if self.target_class >= 0 and cls_id != self.target_class:
+                continue
+            conf = float(boxes.conf[i].item())
+            if conf > best_conf:
+                x1, y1, x2, y2 = boxes.xyxy[i].tolist()
+                best = ((x1 + x2) / 2.0, (y1 + y2) / 2.0, x2 - x1)
+                best_conf = conf
+        return best
