@@ -145,7 +145,7 @@ class CenterNode(Node):
         #  物理安全边界配置（按需修改）
         self.MAX_XY_DIST = 1000.0   # 水平最大允许坐标（米），超过则丢弃
         self.MAX_ALT = 50.0        # 最大相对高度（米），比如上限 100 米
-        self.MIN_ALT = 3.0     # 最低相对高度（米，因为向下为负，比如限制最低到 -50 米）
+        self.MIN_ALT = 3.0     # 最低相对高度
         
         # 落地判定阈值（用于 RETURN 后自动回 GROUND）
         self.LAND_ALT_THRESHOLD = 0.3      # 高度低于此值视为落地（米）
