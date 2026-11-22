@@ -60,6 +60,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from math import isfinite
 from typing import Dict, Optional
 
 import rclpy
@@ -91,11 +92,15 @@ class StateSnapshot:
         position: ENU 位置，米。
         stamp: 状态源时间戳，秒；无 header.stamp 时用接收时刻。
         received_at: 本地接收时刻，秒；仅用于日志排查。
+        velocity: ENU 速度，米/秒；取接口 E 的 ``twist.linear``。
+            含非有限值时置 None。速度接近 0 时仍保留原值，
+            由 P1 用 ``_MIN_TURN_SPEED`` 判断“没有可信朝向”后跳过判定。
     """
 
     position: tuple[float, float, float]
     stamp: float
     received_at: float
+    velocity: Optional[tuple[float, float, float]] = None
 
 
 class AlgorithmNode(Node):
@@ -298,7 +303,21 @@ class AlgorithmNode(Node):
             ),
             stamp=stamp,
             received_at=now,
+            velocity=self._velocity_of(msg),
         )
+
+    @staticmethod
+    def _velocity_of(msg: Odometry) -> Optional[tuple[float, float, float]]:
+        """从接口 E 取 ENU 速度；含 NaN/Inf 时返回 None。
+
+        桥接已按 ``ned_to_enu_vel`` 转成 ENU，单位米/秒，不需要再换坐标。
+        速度接近 0 时不在这里拦截，交给 P1 的 ``_MIN_TURN_SPEED``。
+        """
+        linear = msg.twist.twist.linear
+        velocity = (float(linear.x), float(linear.y), float(linear.z))
+        if not all(isfinite(component) for component in velocity):
+            return None
+        return velocity
 
     def _on_strategy(self, msg: String) -> None:
         """接收课题三战术指令；非法 JSON/动作一律拒绝，不改当前模式。"""
@@ -361,6 +380,7 @@ class AlgorithmNode(Node):
                 ego_stamp,
                 now,
                 self._params,
+                ego_velocity=snapshot.velocity if snapshot is not None else None,
             )
 
             # ! 中枢动作（TAKEOFF/HOVER/RETURN/RESUME_PATROL）由 P3 透传，

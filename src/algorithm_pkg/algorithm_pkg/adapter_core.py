@@ -284,6 +284,8 @@ def plan_drone(
     ego_stamp: Optional[float],
     now: float,
     params: PlanParams,
+    *,
+    ego_velocity: Optional[Vec3] = None,
 ) -> PlanResult:
     """对一架飞机执行一帧 P3 规划。
 
@@ -295,6 +297,8 @@ def plan_drone(
         ego_stamp: 己方状态源时间戳，秒；``None`` 表示不检查新鲜度。
         now: 当前时刻，秒。
         params: 规划参数。
+        ego_velocity: 己方 ENU 速度，米/秒；来自接口 E 的 ``twist.linear``。
+            ``None`` 表示没提供，P1 跳过动力学可达性判定。
 
     Returns:
         ``PlanResult``；``point is None`` 时本帧不发布。
@@ -308,6 +312,7 @@ def plan_drone(
         now,
         runtime.prev_result,
         ego_stamp=ego_stamp,
+        ego_velocity=ego_velocity,
     )
 
     # ! ATTACK 的 NORMAL 无解需要适配层补保持点；L1/L2 已由 P3 补过，

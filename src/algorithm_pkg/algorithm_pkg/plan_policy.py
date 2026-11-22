@@ -58,6 +58,8 @@ def plan(
     own: Optional[Vec3],
     target: Optional[TargetState],
     params: Optional[PlanParams] = None,
+    *,
+    own_velocity: Optional[Vec3] = None,
 ) -> PlanResult:
     """根据战术动作生成一帧规划结果。
 
@@ -67,6 +69,8 @@ def plan(
         own: 己方当前位置，ENU 米；``None`` 表示状态还没到。
         target: ``predict_target`` 的输出；``None`` 表示还没有目标。
         params: 策略参数；``None`` 时使用 ``PlanParams()`` 的默认值。
+        own_velocity: 己方当前速度，ENU 米/秒；``None`` 表示调用方没提供，
+            此时不做动力学可达性判定，行为与 P5 一致。
 
     Returns:
         ``PlanResult``。调用方只应在 ``result.point is not None`` 时发布。
@@ -135,6 +139,8 @@ def plan(
         return _no_plan(action, raw, "velocity_unavailable")
 
     # 7. 交给 P1 算几何点；v_max 按动作选。
+    #    动力学参数取 PlanParams：a_max 与 yaw_rate_max 是既有参数出口，
+    #    这里第一次真正参与求解（规范 §4）。
     solution = solve_intercept(
         own,
         target,
@@ -143,6 +149,9 @@ def plan(
         t_go_max=params.t_go_max,
         min_distance=params.min_distance,
         d_tail=params.d_tail,
+        own_velocity=own_velocity,
+        a_max=params.a_max,
+        omega_max=params.yaw_rate_max,
     )
     if solution.point is None:
         # ATTACK 无解时这里就是 None；不会伪造尾随点。

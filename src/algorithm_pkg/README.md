@@ -2,7 +2,7 @@
 
 本包计算无人机编队的规划点：接收目标位置、己方状态和战术指令，输出一个 ENU 点和动作标签，发布到 `/planning/target_pose`。本包不控制飞行器，不处理避障、姿态、油门和速度控制。
 
-当前状态：P1～P4 已完成，P5 参数化与收口已加入，214 项 pytest（原 206 + 6 个参数用例 + 2 个 stamp 用例）；Jazzy 下 `colcon build` 与 `colcon test` 通过。
+当前状态：P1～P4 已完成，P5 参数化与收口已加入，P6 已把 a_max/R_min 的动力学可达性判定接入 INTERCEPT，并在容器内四场景复跑通过；227 项 pytest（P5 的 214 + P6 的 5 个动力学用例 + 8 个场景定义用例）。Jazzy 下 `colcon build` 与 `colcon test` 通过。
 
 阅读建议：
 
@@ -127,11 +127,34 @@ P1～P4 是内部分层编号：P1 几何计算、P2 动作策略、P3 异常降
 
 常见无解情况：目标速度更快、目标横穿、目标距离超出 `t_go_max` 可达范围。判定方式是解方程，不使用“目标更快”作为前置条件。
 
+#### 动力学可达性判定（P6）
+
+几何有解不等于飞得到。P6 起，拿到己方速度时多做一层判定：
+
+```text
+R_min(v) = max(v² / a_max, v / omega_max)          # 最小转弯半径
+R_req    = |d| / (2·sin(θ/2))                      # 到拦截点的等半径圆弧
+R_req < R_min  →  动力学不可达
+```
+
+θ 是己方当前速度方向到拦截方向的转向角，`d` 是到拦截点的位移。
+不可达时按“无解”处理，输出尾随点，`reason=dynamic_infeasible_tail`。
+
+边界条件：
+
+- 调用方没传己方速度 → 跳过判定，行为与 P5 完全一致。
+- 己方速度 < 0.5 m/s → 跳过判定。低速时 `R_min` 趋 0，强行判定会把所有转弯都放过。
+- 判定**只对 INTERCEPT 生效**。ATTACK 末段语义（撞击还是贴近后保持）尚未定案，规划层不改它，详见第 6 节。
+
+`a_max` 与 `yaw_rate_max` 因此第一次真正参与求解；此前它们只是参数出口。
+
 ### 2.5 `ATTACK`
 
 与 INTERCEPT 使用同一方程，速度上限取 `v_max_attack`，launch 为 23.59 m/s（学长理论；代码兜底 6.0）。
 
 区别只在无解时的处理：INTERCEPT 退化为尾随点，ATTACK 不退化为尾随点。原因是中枢收到 ATTACK 后会全速飞行，若本包给出目标后方的尾随点，飞行器会全速冲向目标后方，动作与意图不一致。
+
+ATTACK **不做**动力学可达性判定。P5 文档第 10.4 节明确写：ATTACK 的末段语义（撞击模式还是贴近后保持）尚未定案；在语义未定时用转弯半径判定顺手改掉它，等于替后续决策做主。实测依据：在 P5 的 4 m/s 横穿数据上回放，严格判定会拒绝 128 帧 ATTACK，最后一帧在命中前 0.4 s，会把已记录的 0.054 m 命中改掉。因此 P6 只判 INTERCEPT。
 
 ATTACK 无解时，策略层返回 `point=None, reason=attack_no_solution`；适配层补发“己方当前位置”的保持点（`reason=hold_attack_no_solution`），避免中枢继续使用上一帧的攻击点。
 
@@ -165,7 +188,7 @@ ATTACK 无解时，策略层返回 `point=None, reason=attack_no_solution`；适
  9. 预测年龄 > max_pred_age  → target_too_old
 10. 己方位置非法             → own_invalid
 11. INTERCEPT/ATTACK 无速度  → velocity_unavailable
-12. 拦截方程无解             → 尾随点（INTERCEPT）或 attack_no_solution（ATTACK）
+12. 拦截方程无解或动力学不可达 → 尾随点（INTERCEPT）或 attack_no_solution（ATTACK）
 13. 边界裁剪后无有效点       → constraint_rejected
 14. 输出约束拒绝             → guard_* 原因
 ```
@@ -194,7 +217,7 @@ ATTACK 无解时，策略层返回 `point=None, reason=attack_no_solution`；适
 | `plan_policy.py` | 七种动作的发布规则与原因 | 不执行几何计算 |
 | `plan_types.py` | `PlanResult` 类型与动作分组 | 不包含业务判断 |
 | `plan_params.py` | 参数、默认值、合法性校验 | 其他模块不得硬编码参数 |
-| `algorithm_core.py` | 预测、拦截求解、边界裁剪，纯函数 | 不依赖 ROS，不包含动作策略 |
+| `algorithm_core.py` | 预测、拦截求解、转弯半径判定、边界裁剪，纯函数 | 不依赖 ROS，不包含动作策略 |
 | `launch/algorithm.launch.py` | 33 个启动参数 | 不得隐藏参数 |
 
 ### ROS 依赖约束
@@ -209,7 +232,7 @@ grep -rn "import rclpy" src/algorithm_pkg/algorithm_pkg/
 
 `scripts/p4/` 为联调脚本，会启动 ROS 节点，不受该约束限制。
 
-该约束可直接验证：设置 `PYTHONPATH=src/algorithm_pkg` 后，`pytest` 可运行全部 214 项测试，不需要 launch，也不需要中枢节点在线。
+该约束可直接验证：设置 `PYTHONPATH=src/algorithm_pkg` 后，`pytest` 可运行全部 227 项测试，不需要 launch，也不需要中枢节点在线。
 
 ### 修改指引
 
@@ -221,7 +244,7 @@ grep -rn "import rclpy" src/algorithm_pkg/algorithm_pkg/
 | 进级/恢复帧数 | `plan_params.py` | 不硬编码 2/3 |
 | 输出约束顺序 | `safety_guard.py` | 顺序不可调整 |
 | 新增话题 | `algorithm_node.py`、`adapter_core.py` | 不将解析逻辑放入节点回调 |
-| 拦截计算 | `algorithm_core.py` | 不在此模块判断动作模式 |
+| 拦截计算 | `algorithm_core.py` | 不在此模块判断动作模式；动力学判定只对 INTERCEPT 生效 |
 
 ---
 
@@ -272,8 +295,8 @@ L0 下也可能本帧没有可发布的点，例如输出约束拒绝（`guard_*
 |---|---|---|---|---|
 | `v_max_intercept` | 7.60 | m/s | 拦截速度上限 | 桥接 INTERCEPT 档 0.38×20；本机 14.8 能力内可达 |
 | `v_max_attack` | 14.80 | m/s | 攻击速度上限 | P5 本机实测 `V_max=14.69` 收口；学长理论 23.59 不可达 |
-| `a_max` | 9.79 | m/s² | 最大水平加速度 | P5 本机实测 |
-| `yaw_rate_max` | 3.009 | rad/s | 最大偏航角速度 | P5 本机实测 172.4°/s |
+| `a_max` | 9.79 | m/s² | 最大水平加速度 | P5 本机实测；P6 起参与转弯半径判定 |
+| `yaw_rate_max` | 3.009 | rad/s | 最大偏航角速度 | P5 本机实测 172.4°/s；P6 起参与转弯半径判定 |
 | `v_max` | 4.50 | m/s | 兜底/巡航速度 | 学长 `V_cruise`；本机实测 5.49，保守取 4.50 |
 | `max_step` | 0.74 | m/帧 | 单帧最大跳变 | 14.8 m/s × 0.05 s；桥接按动作分三档 0.225/0.38/0.74 |
 | `max_step_recover` | 0.2 | m/帧 | 恢复第一帧的跳变上限 | 未单独标定 |
@@ -443,35 +466,39 @@ colcon test --packages-select algorithm_pkg
 colcon test-result --verbose
 ```
 
-共 214 项，按层分布：
+共 227 项，按层分布：
 
 | 层 | 文件 | 数量 |
 |---|---|---|
-| P1 几何 | `test_algorithm_core.py` | 33 |
+| P1 几何 | `test_algorithm_core.py` | 38 |
 | P2 策略 | `test_plan_params.py`、`test_plan_policy.py`、`test_plan_replay.py` | 70 |
 | P3 降级 | `test_validators.py`、`test_degrade_fsm.py`、`test_degrade_policy.py`、`test_safety_guard.py`、`test_recovery.py`、`test_replay_anomaly.py` | 91 |
 | P4 适配 | `test_node_adapter.py` | 15 |
 | 场景回归 | `test_scenario_p3.py` | 5 |
+| 场景定义 | `test_scenario_defs.py` | 8 |
 
 测试方法、单帧回放、场景仿真的用法见 [文档/算法测试基本方法.md](../../文档/算法测试基本方法.md)。
 
 ## 文档
 
 - 本文件：算法包的接口、策略、分层与已知问题。
+- `scripts/p5/scenario_suite.py`：Gazebo 统一场景执行器；`scenario_report.py`：离线看结果表；`scenario_chart.py`：离线出图。场景定义在 `algorithm_pkg/scenario_defs.py`，用法见测试方法文档 8.8 节。
 - [文档/算法测试基本方法.md](../../文档/算法测试基本方法.md)：测试分层、调试方法、必做场景和排查流程。
 - [文档/课题二内部接口规范.md](../../文档/课题二内部接口规范.md)、[课题二-课题三-接口规范.md](../../文档/课题二-课题三-接口规范.md)：上下游接口。
 - [文档/内部分工细节.md](../../文档/内部分工细节.md)：团队分工与物理参数依据。
 - [文档/Jazzy开发与Humble交付指南.md](../../文档/Jazzy开发与Humble交付指南.md)：Docker/Humble 环境、P5 SITL 启动。
 
-## 未确认 / 待决策（P5 收口）
+## 未确认 / 待决策（P5 收口 + P6）
 
-- 接口 C 的 `stamp`：已按规范改成源头时刻（2026-11-20，214 项测试）。中枢 `max_plan_delay=0.8 s` 现在校验的是源头年龄；复测正常规划源头年龄 12～37 ms，不会触发丢弃；L1 外推超过 0.8 s 的帧会被中枢丢弃，保持点仍由中枢重发。阈值 0.5 还是 0.8 仍需 main 统一。
+- 接口 C 的 `stamp`：已按规范改成源头时刻（2026-11-20，P5 收口时 214 项测试）。中枢 `max_plan_delay=0.8 s` 现在校验的是源头年龄；复测正常规划源头年龄 12～37 ms，不会触发丢弃；L1 外推超过 0.8 s 的帧会被中枢丢弃，保持点仍由中枢重发。阈值 0.5 还是 0.8 仍需 main 统一。
 - `V_max`：已按本机 `x500_down_cam` 实测 14.69 收口到 launch 的 14.80，动力学复测峰值 15.19（约 2.6% 超调）。学长理论 23.59 在这套 main 仿真不可达，只保留常量作参考。
 - `a_max` / `yaw_rate_max`：launch 用本机实测 9.79 / 172.4°/s；`PlanParams` 代码兜底仍是 2.0 / 90°/s。
 - `max_step=0.74`：对应 ATTACK 档 14.8 m/s；桥接三档 0.225/0.38/0.74。算法侧仍是单值上限，够用但不按动作切换。
 - `min_distance=0.5 m`：最终参数 ATTACK 固定目标最近 0.090 m，没有抽搐或过冲；保持 0.5。
 - `max_step_recover=0.2 m/帧`：最终参数 L2→NORMAL 恢复首帧实测 0.200 m，随后放开到 0.605 m；保持 0.2。
-- 高速横穿 4 m/s：最近 0.030 m，命中；`algorithm_core` 不需要 a_max/R_min 修正。6 m/s 目标追不上（最近 9.939 m）：P2 的 `max_step` 按“离己方位置”裁剪，规划点只领先 0.74 m，桥接 P 项只有约 1.33 m/s，实际追速约 4～6 m/s。这是 P2 裁剪语义 + main 控制回路的组合，不是 a_max/R_min，也不是桥接档位没生效。
+- 高速横穿 4 m/s：最近 0.030 m，命中；P5 判定“不需要 a_max/R_min 修正”，P6 按规范 §4 仍补上了判定，但只对 INTERCEPT 生效，回放 P5 数据零行为改变。6 m/s 目标追不上（最近 9.939 m）：P2 的 `max_step` 按“离己方位置”裁剪，规划点只领先 0.74 m，桥接 P 项只有约 1.33 m/s，实际追速约 4～6 m/s。这是 P2 裁剪语义 + main 控制回路的组合，不是 a_max/R_min，也不是桥接档位没生效。
+- 动力学可达性判定（P6）：已接入 INTERCEPT，`reason=dynamic_infeasible_tail`；不传己方速度或速度 <0.5 m/s 时跳过。**ATTACK 未接入**，因为末段语义未定案，且严格判定会拒绝 P5 已记录命中的前 0.4 s 帧。容器内四场景复跑（2026-11-22）：`intercept_cross_4` 0.089 m、`cross_attack_4` 0.055 m（P5 记 0.054 m）、`intercept_uturn` 闭环触发 134 帧、`intercept_cross_6` 5.454 m 仍 MISS。
+- `R_min` 是速度相关量，不是常数：`R_min(v)=max(v²/a_max, v/ω)`，分界速度 `a_max/ω=3.25 m/s`。README 早前记的实测 `R_min≈3.01 m` 反解出 v=5.43 m/s，与巡航实测 5.49 接近，推断是巡航速度下的值。
 - 规划频率：连续规划实测 20.01 Hz，定时器正常。之前 10 Hz 是“追慢目标→距离过近→本包停发点”造成的统计假象，不是定时器问题。
 - 真机可达速度：P5 数据只覆盖 Gazebo 的 `x500`/`x500_down_cam`，不是真机。
 - 3D：2026-11-21 驱动更新失败，已放弃；观察与汇报改用 2D 图表，见 `文档/算法测试基本方法.md` 8.4 节。

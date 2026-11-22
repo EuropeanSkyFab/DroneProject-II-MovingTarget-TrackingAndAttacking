@@ -42,11 +42,12 @@ class PlanParams:
         v_max_attack: ATTACK 速度上限，米/秒；代码兜底 6.0，
             launch 用 P5 实测收口 14.80（理论 23.59 不可达，仅注释参考）。
         a_max: 最大水平加速度，米/秒²；代码兜底 2.0，
-            launch 用 P5 实测 9.79。当前只做参数出口，
-            冲突三（高速拦截）再参与求解，不要在 algorithm_core 里写死。
+            launch 用 P5 实测 9.79。P6 起参与 ``solve_intercept`` 的
+            最小转弯半径判定 ``R_min = max(v²/a_max, v/yaw_rate_max)``，
+            只在 INTERCEPT 且拿到己方速度时生效。
         yaw_rate_max: 最大偏航角速度，弧度/秒；代码兜底 90°/s，
-            launch 用 P5 实测 172.4°/s。当前只做参数出口，
-            转弯半径逻辑落地时使用。
+            launch 用 P5 实测 172.4°/s。P6 起与 a_max 一起构成
+            最小转弯半径的角速度约束。
         t_go_max: 最长允许拦截时间，秒；超过认为追不上。
         min_distance: 目标太近时不出点，米。
         d_tail: INTERCEPT 追不上时，尾随点距目标多远，米。

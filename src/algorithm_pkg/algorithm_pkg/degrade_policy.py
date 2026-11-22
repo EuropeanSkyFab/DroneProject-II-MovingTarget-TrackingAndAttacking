@@ -377,6 +377,7 @@ def plan_with_degrade(
     *,
     ego_stamp: Optional[float] = None,
     ego_status: Optional[EgoStatus] = None,
+    ego_velocity: Optional[Vec3] = None,
 ) -> PlanResult:
     """在 P2 ``plan()`` 外面加一层异常降级与安全护栏。
 
@@ -394,6 +395,10 @@ def plan_with_degrade(
         ego_stamp: 己方状态源时间戳，秒；``None`` 表示调用方没提供，
             此时 ``validate_ego`` 返回 ``ego_freshness_unchecked``。
         ego_status: 已经检测好的己方状态；传了就不再重复检测。
+        ego_velocity: 己方当前速度，ENU 米/秒；``None`` 表示调用方没提供，
+            此时 P2 不做动力学可达性判定。只在 NORMAL 级别下传：
+            L1/L2 的输入已经被外推或保持，用它们的点再判转弯半径没有意义，
+            反而会让保持点逐帧变成尾随点。
 
     Returns:
         ``PlanResult``。``point is None`` 时本帧不要发布。
@@ -478,9 +483,11 @@ def plan_with_degrade(
     if level is DegradeLevel.NORMAL:
         return _plan_normal(
             action, raw, own, target, target_status, fsm, params, now,
-            prev_result,
+            prev_result, ego_velocity,
         )
     if level is DegradeLevel.EXTRAPOLATING:
+        # ! L1 不传 ego_velocity：目标已被外推，再用转弯半径判一次会
+        # ! 把本可外推的点判成尾随点，属于降级期行为突变。
         return _plan_extrapolating(
             action, raw, own, target, fsm, params, now, prev_result,
         )
@@ -516,9 +523,11 @@ def _plan_normal(
     params: PlanParams,
     now: float,
     prev_result: Optional[PlanResult],
+    ego_velocity: Optional[Vec3] = None,
 ) -> PlanResult:
     """NORMAL：调用 P2，再收一次护栏。"""
-    result = base_plan(action, own, target, params)
+    # ! ego_velocity 只在 NORMAL 传：这是唯一“用新鲜目标正经算点”的级别。
+    result = base_plan(action, own, target, params, own_velocity=ego_velocity)
 
     if result.point is None:
         # P2 自己决定不发点时，P3 不伪造点；级别仍为 NORMAL，但把

@@ -365,6 +365,133 @@ def test_fast_crossing_target_is_unreachable(measured):
     )
 
 
+def test_intercept_dynamic_infeasible_uses_tail(measured):
+    """场景：目标在己方身后 2 米、同向慢移，几何有解但要求瞬间掉头。
+
+    操作：调用 solve_intercept()，mode=INTERCEPT，v_max=4，
+          own_velocity=(4,0,0) 表示己方正以 4 m/s 向东飞。
+    输入：own=(0,0,10)，target=(-2,0,10)，v_t=(0.5,0,0)。
+          转向角 180°，位移 1.778 m，所需转弯半径 0.889 m；
+          4 m/s 时最小转弯半径 1.633 m，物理上转不过来。
+    预期：reachable=False，reason=dynamic_infeasible_tail，
+          尾随点 (-6,0,10)；不能返回拦截点。
+    """
+    target = make_state((-2.0, 0.0, 10.0), (0.5, 0.0, 0.0))
+    result = solve_intercept(
+        (0.0, 0.0, 10.0),
+        target,
+        4.0,
+        own_velocity=(4.0, 0.0, 0.0),
+        d_tail=4.0,
+    )
+
+    assert result.action == "INTERCEPT"
+    assert not result.reachable
+    assert result.reason == "dynamic_infeasible_tail"
+    assert result.point == pytest.approx((-6.0, 0.0, 10.0))
+
+    measured(
+        f"reachable=False, point={fmt_vec(result.point)}, "
+        f"reason={result.reason}"
+    )
+
+
+def test_attack_ignores_turn_radius_gate(measured):
+    """场景：与掉头用例同一几何，但模式是 ATTACK，且传了己方速度。
+
+    操作：调用 solve_intercept()，mode=ATTACK，v_max=4，
+          own_velocity=(4,0,0)。
+    输入：own=(0,0,10)，target=(-2,0,10)，v_t=(0.5,0,0)。
+    预期：reachable=True，reason=intercept_point；
+          ATTACK 不做动力学判定——它的末段语义（撞击还是贴近后保持）
+          P5 尚未定案，规划层不能顺手改掉。
+    """
+    target = make_state((-2.0, 0.0, 10.0), (0.5, 0.0, 0.0))
+    result = solve_intercept(
+        (0.0, 0.0, 10.0),
+        target,
+        4.0,
+        mode="ATTACK",
+        own_velocity=(4.0, 0.0, 0.0),
+    )
+
+    assert result.action == "ATTACK"
+    assert result.reachable
+    assert result.reason == "intercept_point"
+    assert result.point == pytest.approx((-1.778, 0.0, 10.0), abs=1e-3)
+
+    measured(f"reachable=True, reason={result.reason}")
+
+
+def test_intercept_without_ego_velocity_skips_dynamics(measured):
+    """场景：没提供己方速度时，动力学判定必须跳过，行为与 P5 完全一致。
+
+    操作：调用 solve_intercept()，mode=INTERCEPT，v_max=4，不传 own_velocity。
+    输入：own=(0,0,10)，target=(-2,0,10)，v_t=(0.5,0,0)（掉头几何）。
+    预期：reachable=True，reason=intercept_point；
+          不知道朝向就不能做动力学判定，不能凭空拒绝。
+    """
+    target = make_state((-2.0, 0.0, 10.0), (0.5, 0.0, 0.0))
+    result = solve_intercept((0.0, 0.0, 10.0), target, 4.0)
+
+    assert result.reachable
+    assert result.reason == "intercept_point"
+    assert result.point == pytest.approx((-1.778, 0.0, 10.0), abs=1e-3)
+
+    measured(f"reachable=True, reason={result.reason}")
+
+
+def test_intercept_gentle_turn_stays_reachable(measured):
+    """场景：远距 90° 转弯，所需半径远大于最小半径，判定不能误拒。
+
+    操作：调用 solve_intercept()，mode=INTERCEPT，v_max=4，
+          own_velocity=(4,0,0)。
+    输入：own=(0,0,10)，target=(0,10,10)，v_t=(0,2,0)。
+          位移 20 m，转向角 90°，所需半径 14.14 m，大于 1.633 m。
+    预期：reachable=True，reason=intercept_point，拦截点 (0,20,10)。
+    """
+    target = make_state((0.0, 10.0, 10.0), (0.0, 2.0, 0.0))
+    result = solve_intercept(
+        (0.0, 0.0, 10.0),
+        target,
+        4.0,
+        own_velocity=(4.0, 0.0, 0.0),
+    )
+
+    assert result.reachable
+    assert result.reason == "intercept_point"
+    assert result.t_go == pytest.approx(5.0)
+    assert result.point == pytest.approx((0.0, 20.0, 10.0))
+
+    measured(
+        f"reachable=True, t_go={result.t_go:.3f}s, "
+        f"point={fmt_vec(result.point)}"
+    )
+
+
+def test_slow_ego_velocity_skips_dynamics(measured):
+    """场景：己方速度接近 0（起飞/悬停），没有可信朝向，判定必须跳过。
+
+    操作：调用 solve_intercept()，mode=INTERCEPT，v_max=4，
+          own_velocity=(0.2,0,0)。
+    输入：own=(0,0,10)，target=(-2,0,10)，v_t=(0.5,0,0)（掉头几何）。
+    预期：reachable=True，reason=intercept_point；
+          低速时最小转弯半径趋 0，强行判定会把所有转弯都放过。
+    """
+    target = make_state((-2.0, 0.0, 10.0), (0.5, 0.0, 0.0))
+    result = solve_intercept(
+        (0.0, 0.0, 10.0),
+        target,
+        4.0,
+        own_velocity=(0.2, 0.0, 0.0),
+    )
+
+    assert result.reachable
+    assert result.reason == "intercept_point"
+
+    measured(f"reachable=True, reason={result.reason}")
+
+
 def test_track_returns_target_point_without_offset(measured):
     """场景：TRACK 模式，中枢自己会做近距离环绕，规划不重复加偏移。
 
