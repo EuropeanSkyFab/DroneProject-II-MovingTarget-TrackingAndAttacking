@@ -23,6 +23,11 @@ def generate_launch_description():
                 # ===== 切换 YOLO 检测器时取消注释 =====
                 # {'detector_type': 'yolo'},
                 # {'yolo_model_path': 'yolov8n.pt'},
+
+                # ===== 测距模式（回应规划组反馈） =====
+                # {'distance_mode': 'auto'},       # auto / ground / size
+                # {'target_real_width': 0.5},      # 目标真实宽度(米)，标定后尺寸估距自动启用
+                #                                  # 启用后 orientation.w=0.5 标记估距结果
             ]
         )
     ])
