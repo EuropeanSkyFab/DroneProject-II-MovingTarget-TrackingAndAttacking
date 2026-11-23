@@ -12,6 +12,8 @@ from std_msgs.msg import String
 from sensor_msgs.msg import BatteryState
 from diagnostic_msgs.msg import DiagnosticStatus, KeyValue
 
+from center_node_pkg.hover_target import resolve_hover_point
+
 
 
 class CenterNode(Node):
@@ -129,9 +131,11 @@ class CenterNode(Node):
         # 专属字典
         self.latest_plan_targets = {} 
         self.last_plan_times = {}  # 每个飞机的规划时间戳
+        self.latest_plan_actions = {}  # 最近规划点对应的动作标签
         for d_id in self.swarm_config:
             self.latest_plan_targets[d_id] = None
-            self.last_plan_times[d_id] = 0.0    
+            self.last_plan_times[d_id] = 0.0
+            self.latest_plan_actions[d_id] = ""
         
         # 基础变量
         self.last_vision_time = 0.0 # 计时变量
@@ -195,11 +199,13 @@ class CenterNode(Node):
             out_msg.pose.position.z = self.MAX_ALT
             self.get_logger().warn(f"[{drone_id}] 警告：目标高度超过上限，强制拦截在 {self.MAX_ALT}m！", throttle_duration_sec=2.0)
 
-        # 2. 有条件限制最低高度（仅在常规追踪、悬停时生效）
-        if current_mode not in ["TAKEOFF", "RETURN", "ATTACK"]:
-            # 带 0.5 米的回差缓冲，只要跌破 2.5 就被拽回 2.6
+        # 2. 最低高度：除起飞、返航/降落外，所有状态都不得低于 MIN_ALT。
+        #    HOVER 的固定点也走这里；HOVER 允许固定在 3 m 及以上。
+        if current_mode not in ["TAKEOFF", "RETURN"]:
+            # 跌破 3.0 m 就拉回 3.1 m；加 0.1 m 即可，不要加 0.5 m，
+            # 否则飞控会因为设定点跳变向上冲。
             if out_msg.pose.position.z < self.MIN_ALT:
-                out_msg.pose.position.z = self.MIN_ALT + 0.1 # 加0.1米即可，不要加0.5，否则飞控会向上跳
+                out_msg.pose.position.z = self.MIN_ALT + 0.1
                 
                 # 这里用 warn，且加 throttle
                 self.get_logger().warn(f"[{drone_id}] 目标高度过低，强制拉高至 {self.MIN_ALT + 0.1:.1f}m", throttle_duration_sec=2.0)
@@ -353,9 +359,11 @@ class CenterNode(Node):
             target.pose.position.y = y
             target.pose.position.z = z
             
-            # ★ 核心：存入专属字典和专属时间
+            # ★ 核心：存入专属字典、专属时间和动作标签。
+            # ! 动作标签只用于 HOVER 筛选，不驱动模式；模式仍由 /strategy/cmd 决定。
             self.latest_plan_targets[drone_id] = target
-            self.last_plan_times[drone_id] = time.time() 
+            self.last_plan_times[drone_id] = time.time()
+            self.latest_plan_actions[drone_id] = str(data.get("action", ""))
             
         except Exception as e:
             self.get_logger().error(f"解析规划 JSON 失败: {e}")
@@ -473,6 +481,7 @@ class CenterNode(Node):
         for d_id in self.swarm_config:
             if time.time() - self.last_plan_times[d_id] > 2.0:
                 self.latest_plan_targets[d_id] = None
+                self.latest_plan_actions[d_id] = ""
 
         # 3. 己方位姿保鲜（多机专属，分机独立结算）
         #    桥接断流后必须清掉僵尸位姿，否则状态机会拿过期坐标继续算目标点并发指令。
@@ -516,11 +525,37 @@ class CenterNode(Node):
             # 悬停
             elif mode == "HOVER":
                 if my_state is not None:
-                    # 先取当前位置作为默认目标点
-                    target_x = my_state.pose.pose.position.x
-                    target_y = my_state.pose.pose.position.y
-                    target_z = my_state.pose.pose.position.z
-                    
+                    own_xyz = (
+                        my_state.pose.pose.position.x,
+                        my_state.pose.pose.position.y,
+                        my_state.pose.pose.position.z,
+                    )
+
+                    # 算法接入固定点后，HOVER 优先用规划点；没有新的 HOVER 点
+                    # 才回退当前位置。只认 HOVER 标签，避免刚切模式时拿
+                    # 上一帧 TRACK/INTERCEPT 的旧点冲一下。
+                    my_plan = self.latest_plan_targets.get(drone_id)
+                    plan_xyz = None
+                    if my_plan is not None:
+                        plan_xyz = (
+                            my_plan.pose.position.x,
+                            my_plan.pose.position.y,
+                            my_plan.pose.position.z,
+                        )
+                    base, source = resolve_hover_point(
+                        own_xyz,
+                        plan_xyz,
+                        self.latest_plan_actions.get(drone_id, ""),
+                        time.time() - self.last_plan_times[drone_id],
+                        self.max_plan_delay,
+                    )
+                    target_x, target_y, target_z = base
+                    if source == "plan":
+                        self.get_logger().debug(
+                            f"{drone_id} HOVER 使用规划固定点",
+                            throttle_duration_sec=2.0,
+                        )
+
                     # ★ 悬停时的主动避障：如果别人靠得太近，立刻挪窝
                     for other_id in self.swarm_config:
                         if other_id == drone_id: continue
