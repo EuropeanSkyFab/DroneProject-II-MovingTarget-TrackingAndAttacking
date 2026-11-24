@@ -1,18 +1,18 @@
 # 每次新开终端必须执行：
 source /opt/ros/humble/setup.bash
 source ~/ros2_ws/install/setup.bash
+source ./src/flight_ctrl_pkg/scripts/env.sh
 export ROS_DOMAIN_ID=0
 colcon build
 
+# 清除僵尸程序
+pkill -9 -f "center_node_pkg/lib"; pkill -9 -f "px4_bridge_node"; pkill -9 -f "gz sim"; pkill -9 -f "px4_sitl_default/bin/px4"; pkill -9 -f "MicroXRCEAgent"
+# 验证清理干净了
+pgrep -af "center_node|px4_bridge|gz sim|px4_sitl|MicroXRCEAgent" || echo "已全部清空"
+ros2 topic info /drone_1/fmu/in/trajectory_setpoint | grep "Publisher count"
 
-# 一号机
-cd ~/PX4-Autopilot
-PX4_SYS_AUTOSTART=4001 PX4_GZ_MODEL=x500 ./build/px4_sitl_default/bin/px4 -i 0
-
-#二号机
-cd ~/PX4-Autopilot
-PX4_SYS_AUTOSTART=4001 PX4_GZ_MODEL_POSE="0,2" PX4_GZ_MODEL=x500 ./build/px4_sitl_default/bin/px4 -i 1
-
-# 三号机
-cd ~/PX4-Autopilot
-PX4_SYS_AUTOSTART=4001 PX4_GZ_MODEL_POSE="0,4" PX4_GZ_MODEL=x500 ./build/px4_sitl_default/bin/px4 -i 2
+# 启动仿真控制GUI程序
+# 先清场
+pkill -f 'px4_sitl_default/bin/px4'; pkill -f 'gz sim'
+# 启动 GUI
+cd ~/ros2_ws/mock_nodes && python3 start_swarm_sim.py

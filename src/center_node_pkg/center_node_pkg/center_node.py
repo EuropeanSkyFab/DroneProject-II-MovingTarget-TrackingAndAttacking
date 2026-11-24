@@ -12,8 +12,6 @@ from std_msgs.msg import String
 from sensor_msgs.msg import BatteryState
 from diagnostic_msgs.msg import DiagnosticStatus, KeyValue
 
-from center_node_pkg.hover_target import resolve_hover_point
-
 
 
 class CenterNode(Node):
@@ -131,11 +129,9 @@ class CenterNode(Node):
         # 专属字典
         self.latest_plan_targets = {} 
         self.last_plan_times = {}  # 每个飞机的规划时间戳
-        self.latest_plan_actions = {}  # 最近规划点对应的动作标签
         for d_id in self.swarm_config:
             self.latest_plan_targets[d_id] = None
-            self.last_plan_times[d_id] = 0.0
-            self.latest_plan_actions[d_id] = ""
+            self.last_plan_times[d_id] = 0.0    
         
         # 基础变量
         self.last_vision_time = 0.0 # 计时变量
@@ -149,7 +145,7 @@ class CenterNode(Node):
         #  物理安全边界配置（按需修改）
         self.MAX_XY_DIST = 1000.0   # 水平最大允许坐标（米），超过则丢弃
         self.MAX_ALT = 50.0        # 最大相对高度（米），比如上限 100 米
-        self.MIN_ALT = 3.0     # 最低相对高度
+        self.MIN_ALT = 3.0     # 最低相对高度（米，因为向下为负，比如限制最低到 -50 米）
         
         # 落地判定阈值（用于 RETURN 后自动回 GROUND）
         self.LAND_ALT_THRESHOLD = 0.3      # 高度低于此值视为落地（米）
@@ -158,8 +154,11 @@ class CenterNode(Node):
         # 追踪模式安全距离：己方与目标水平距离小于此值，绕圈跟随
         self.TRACK_SAFE_DIST = 5.0   # 单位：米，按实测调
         
-        self.COLLISION_WARN_DIST = 10.0   # 预警开始侧滑的距离
-        self.COLLISION_DANGER_DIST = 6.0 # 危险紧急排斥的距离
+        # ===== 防撞距离参数 =====
+        self.COLLISION_WARN_DIST = 10.0     # 预警开始侧滑的距离：小于它开始避让
+        self.COLLISION_CANCEL_DIST = 12.0   # 拉开到该距离以上才撤销避让（滞回，防边界抖动）
+        self.COLLISION_DANGER_DIST = 6.0    # 危险紧急排斥的距离
+        self._avoid_active = {}             # {(me, other): 当前是否处于避让状态}
         
         # 延迟阈值（秒），用于检测数据的时效与可信度（按需修改）
         self.max_vision_delay = 0.5     # 视觉模块数据的时效
@@ -199,13 +198,11 @@ class CenterNode(Node):
             out_msg.pose.position.z = self.MAX_ALT
             self.get_logger().warn(f"[{drone_id}] 警告：目标高度超过上限，强制拦截在 {self.MAX_ALT}m！", throttle_duration_sec=2.0)
 
-        # 2. 最低高度：除起飞、返航/降落外，所有状态都不得低于 MIN_ALT。
-        #    HOVER 的固定点也走这里；HOVER 允许固定在 3 m 及以上。
-        if current_mode not in ["TAKEOFF", "RETURN"]:
-            # 跌破 3.0 m 就拉回 3.1 m；加 0.1 m 即可，不要加 0.5 m，
-            # 否则飞控会因为设定点跳变向上冲。
+        # 2. 有条件限制最低高度（仅在常规追踪、悬停时生效）
+        if current_mode not in ["TAKEOFF", "RETURN", "ATTACK"]:
+            # 带 0.5 米的回差缓冲，只要跌破 2.5 就被拽回 2.6
             if out_msg.pose.position.z < self.MIN_ALT:
-                out_msg.pose.position.z = self.MIN_ALT + 0.1
+                out_msg.pose.position.z = self.MIN_ALT + 0.1 # 加0.1米即可，不要加0.5，否则飞控会向上跳
                 
                 # 这里用 warn，且加 throttle
                 self.get_logger().warn(f"[{drone_id}] 目标高度过低，强制拉高至 {self.MIN_ALT + 0.1:.1f}m", throttle_duration_sec=2.0)
@@ -243,26 +240,39 @@ class CenterNode(Node):
         setattr(self, f'last_state_time_{drone_id}', time.time()) 
         
         
+    # 距离滞回判定：避免避让在边界处反复开关
+    def _avoid_should_engage(self, drone_id, other_id, dist):
+        """距离滞回：小于 COLLISION_WARN_DIST 开始避让，
+        拉开到 COLLISION_CANCEL_DIST 以上才撤销，避免飞机爬升把距离顶过
+        进入阈值后立刻撤销、又掉回去，形成一上一下的自激震荡。"""
+        key = (drone_id, other_id)
+        if dist < self.COLLISION_WARN_DIST:
+            self._avoid_active[key] = True
+        elif dist > self.COLLISION_CANCEL_DIST:
+            self._avoid_active[key] = False
+        return self._avoid_active.get(key, False)
+
     # 基于速度预测与动态优先级的切向势场法（3D战术版）
     def apply_collision_avoidance(self, drone_id, my_state, target, my_mode):
         my_index = self.swarm_config.index(drone_id)
-        
+
         for other_id in self.swarm_config:
-            if other_id == drone_id: 
+            if other_id == drone_id:
                 continue
-            
+
             other_state = self.drone_states.get(other_id)
             other_mode = self.drone_modes.get(other_id, "GROUND")
-            
+
             if other_state is not None and other_mode != "GROUND":
                 odx = my_state.pose.pose.position.x - other_state.pose.pose.position.x
                 ody = my_state.pose.pose.position.y - other_state.pose.pose.position.y
                 odz = my_state.pose.pose.position.z - other_state.pose.pose.position.z
-                
+
                 dist = math.sqrt(odx**2 + ody**2 + odz**2)
-                
-                if dist < self.COLLISION_WARN_DIST and dist > 0.01:
-                    
+
+                # ★ 唯一的改动：距离判定加滞回（进入 10m / 撤销 12m）
+                if self._avoid_should_engage(drone_id, other_id, dist) and dist > 0.01:
+
                     # 1. 算权限
                     is_higher_priority = False
                     if my_mode == "ATTACK" and other_mode != "ATTACK":
@@ -282,43 +292,41 @@ class CenterNode(Node):
                             target.pose.position.x += repel_x * 2.0
                             target.pose.position.y += repel_y * 2.0
                         continue
-                    
+
                     # 3. 低权限机
                     else:
                         # 获取对方当前的垂直速度
                         other_vz = other_state.twist.twist.linear.z
-                        
+
                         # 如果对方在平飞（垂直速度很小）
                         if abs(other_vz) < 0.5:
-                            # 战术拉升：直接往上拉高 3 米
+                            # 战术拉升：直接往上拉高 3 米（多邻居可叠加）
                             target.pose.position.z += 3.0
                             # 限高：必须跟随 MAX_ALT，不能写死 25。
-                            # 写死 25 时，若当前目标 z 已高于 25（MAX_ALT=50），
-                            # 这里会把高度"砍"到 25，等于让飞机向下扎，与拉升意图相反。
                             target.pose.position.z = min(target.pose.position.z, self.MAX_ALT)
                             self.get_logger().warn(f"{drone_id} 对方平飞，战术拉升躲避！", throttle_duration_sec=1.0)
                             continue
-                        
+
                         # 如果对方在斜向爬升/俯冲，直接走下面的水平切向避让，不再垂直机动
                         # 危险圈：超大反向推力
                         if dist < self.COLLISION_DANGER_DIST:
                             repel_x = odx / dist
                             repel_y = ody / dist
-                            
-                            push_force = 6.0 
-                            
+
+                            push_force = 6.0
+
                             target.pose.position.x += repel_x * push_force
                             target.pose.position.y += repel_y * push_force
                             self.get_logger().warn(f"{drone_id} 遭受长机逼近，紧急弹开！", throttle_duration_sec=1.0)
-                            continue 
-                            
+                            continue
+
                         # 预警区：切向滑步
                         ux = odx / dist
                         uy = ody / dist
                         tangent_x = -uy
                         tangent_y = ux
-                        
-                        push_force = (self.COLLISION_WARN_DIST - dist) * 0.8 
+
+                        push_force = (self.COLLISION_WARN_DIST - dist) * 0.8
                         target.pose.position.x += tangent_x * push_force
                         target.pose.position.y += tangent_y * push_force
                         self.get_logger().warn(f"{drone_id} 切向避让长机", throttle_duration_sec=1.0)
@@ -359,11 +367,9 @@ class CenterNode(Node):
             target.pose.position.y = y
             target.pose.position.z = z
             
-            # ★ 核心：存入专属字典、专属时间和动作标签。
-            # ! 动作标签只用于 HOVER 筛选，不驱动模式；模式仍由 /strategy/cmd 决定。
+            # ★ 核心：存入专属字典和专属时间
             self.latest_plan_targets[drone_id] = target
-            self.last_plan_times[drone_id] = time.time()
-            self.latest_plan_actions[drone_id] = str(data.get("action", ""))
+            self.last_plan_times[drone_id] = time.time() 
             
         except Exception as e:
             self.get_logger().error(f"解析规划 JSON 失败: {e}")
@@ -481,7 +487,6 @@ class CenterNode(Node):
         for d_id in self.swarm_config:
             if time.time() - self.last_plan_times[d_id] > 2.0:
                 self.latest_plan_targets[d_id] = None
-                self.latest_plan_actions[d_id] = ""
 
         # 3. 己方位姿保鲜（多机专属，分机独立结算）
         #    桥接断流后必须清掉僵尸位姿，否则状态机会拿过期坐标继续算目标点并发指令。
@@ -525,37 +530,11 @@ class CenterNode(Node):
             # 悬停
             elif mode == "HOVER":
                 if my_state is not None:
-                    own_xyz = (
-                        my_state.pose.pose.position.x,
-                        my_state.pose.pose.position.y,
-                        my_state.pose.pose.position.z,
-                    )
-
-                    # 算法接入固定点后，HOVER 优先用规划点；没有新的 HOVER 点
-                    # 才回退当前位置。只认 HOVER 标签，避免刚切模式时拿
-                    # 上一帧 TRACK/INTERCEPT 的旧点冲一下。
-                    my_plan = self.latest_plan_targets.get(drone_id)
-                    plan_xyz = None
-                    if my_plan is not None:
-                        plan_xyz = (
-                            my_plan.pose.position.x,
-                            my_plan.pose.position.y,
-                            my_plan.pose.position.z,
-                        )
-                    base, source = resolve_hover_point(
-                        own_xyz,
-                        plan_xyz,
-                        self.latest_plan_actions.get(drone_id, ""),
-                        time.time() - self.last_plan_times[drone_id],
-                        self.max_plan_delay,
-                    )
-                    target_x, target_y, target_z = base
-                    if source == "plan":
-                        self.get_logger().debug(
-                            f"{drone_id} HOVER 使用规划固定点",
-                            throttle_duration_sec=2.0,
-                        )
-
+                    # 先取当前位置作为默认目标点
+                    target_x = my_state.pose.pose.position.x
+                    target_y = my_state.pose.pose.position.y
+                    target_z = my_state.pose.pose.position.z
+                    
                     # ★ 悬停时的主动避障：如果别人靠得太近，立刻挪窝
                     for other_id in self.swarm_config:
                         if other_id == drone_id: continue

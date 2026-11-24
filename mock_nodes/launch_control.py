@@ -204,25 +204,26 @@ class GroundStationGUI:
         right_frame = tk.Frame(self.root, bg="#2b2b2b")
         right_frame.pack(side="right", fill="both", expand=True, padx=(0, 15), pady=15)
 
+        # 2×2 布局：桥接 / 视觉、规划 / 中枢（桥接已合并为单一终端）
         right_frame.grid_rowconfigure(0, weight=1, uniform="row")
         right_frame.grid_rowconfigure(1, weight=1, uniform="row")
         right_frame.grid_columnconfigure(0, weight=1, uniform="col")
         right_frame.grid_columnconfigure(1, weight=1, uniform="col")
-        right_frame.grid_columnconfigure(2, weight=1, uniform="col")
 
         monitors = [
-            {"id": "bridge_1", "title": "1号桥接", "default": "mock_mavsdk_bridge.py", "row": 0, "col": 0},
-            {"id": "bridge_2", "title": "2号桥接", "default": "mock_mavsdk_bridge.py", "row": 0, "col": 1},
-            {"id": "bridge_3", "title": "3号桥接", "default": "mock_mavsdk_bridge.py", "row": 0, "col": 2},
-            {"id": "vision",   "title": "视觉模块", "default": "/home/europeanskyfab/ros2_ws/src/vision_pkg/launch/vision_node.launch.py", "row": 1, "col": 0},
-            {"id": "planning", "title": "规划模块", "default": "mock_plan_node.py", "row": 1, "col": 1},
-            {"id": "center",   "title": "中枢模块", "default": "/home/europeanskyfab/ros2_ws/src/center_node_pkg/launch/center_node.launch.py", "row": 1, "col": 2},
+            {"id": "bridge",   "title": "桥接模块", "default": "/home/europeanskyfab/ros2_ws/src/flight_ctrl_pkg/launch/flight_ctrl_swarm.launch.py", "row": 0, "col": 0},
+            {"id": "vision",   "title": "视觉模块", "default": "/home/europeanskyfab/ros2_ws/src/vision_pkg/launch/vision_node.launch.py", "row": 0, "col": 1},
+            {"id": "planning", "title": "规划模块", "default": "mock_plan_node.py", "row": 1, "col": 0},
+            {"id": "center",   "title": "中枢模块", "default": "/home/europeanskyfab/ros2_ws/src/center_node_pkg/launch/center_node.launch.py", "row": 1, "col": 1},
         ]
 
         self.monitor_vars = {}
         self.monitor_txts = {}
         self.processes = {}
         self.log_queues = {}
+        # 启停按钮引用必须在建槽之前初始化（视觉槽内部会用到）
+        self.node_btns_start = {}
+        self.node_btns_stop = {}
 
         for m in monitors:
             # 外层框架
@@ -300,7 +301,6 @@ class GroundStationGUI:
             self.monitor_txts[m["id"]] = txt
                 
             # 保存按钮引用用于启停控制 (常规模块)
-            if not hasattr(self, 'node_btns_start'): self.node_btns_start, self.node_btns_stop = {}, {}
             self.node_btns_start[m["id"]] = btn_start
             self.node_btns_stop[m["id"]] = btn_stop
             self.log_queues[m["id"]] = queue.Queue()
@@ -386,13 +386,11 @@ class GroundStationGUI:
             else:
                 # 如果是普通的 .py 脚本，还是用 python3 直接跑
                 cmd = ["python3", script_path]
-                # 加上之前的动态参数
-                if m_id == "bridge_1":
+                # 单桥接槽：默认按 drone_1 的 MAVSDK 假桥接参数启动。
+                # 若要跑真桥接（三机），把下拉框换成 flight_ctrl_swarm.launch.py 即可，
+                # launch 分支不会走到这里。
+                if m_id == "bridge":
                     cmd.extend(["--ros-args", "-p", "drone_id:=drone_1", "-p", "port:=50052", "-p", "mav_port:=14540"])
-                elif m_id == "bridge_2":
-                    cmd.extend(["--ros-args", "-p", "drone_id:=drone_2", "-p", "port:=50053", "-p", "mav_port:=14541"])
-                elif m_id == "bridge_3":
-                    cmd.extend(["--ros-args", "-p", "drone_id:=drone_3", "-p", "port:=50054", "-p", "mav_port:=14542"])
 
             # 启动进程
             proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1, cwd=os.path.dirname(script_path))
@@ -434,7 +432,7 @@ class GroundStationGUI:
     def stop_node(self, m_id):
         if m_id not in self.processes: return
         proc = self.processes.pop(m_id)
-        self.append_log("vision", f"--- 正在关闭 {m_id} ---\n") # 日志统一打在视觉框里
+        self.append_log(m_id, f"--- 正在关闭 {m_id} ---\n")
         
         # 暴力尝试杀掉整个进程组
         try:
