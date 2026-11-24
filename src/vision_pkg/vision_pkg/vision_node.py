@@ -10,7 +10,8 @@ vision_node.py —— 机载视觉模块主节点（课题二 · 接口A 提供�
   补充   /drone_<id>/state               (nav_msgs/msg/Odometry)      无人机自身 ENU 位姿
 
 【发布】
-  接口A  /vision/target_pose  (geometry_msgs/msg/PoseWithCovarianceStamped)
+  接口A  /vision/target_pose_cov  (geometry_msgs/msg/PoseWithCovarianceStamped)
+         /vision/target_pose      (geometry_msgs/msg/PoseStamped，迁移期旧话题)
          - 目标在 ENU 世界系下的绝对三维坐标，frame_id = "world"
          - header.stamp 必须是【图像采集的原始时间】（分工细节文档新规），不是推理结束时间
          - 检测不到目标时【停止发送】
@@ -46,7 +47,7 @@ from rclpy.qos import qos_profile_sensor_data
 
 from sensor_msgs.msg import Image, CameraInfo
 from nav_msgs.msg import Odometry
-from geometry_msgs.msg import PoseWithCovarianceStamped
+from geometry_msgs.msg import PoseStamped, PoseWithCovarianceStamped
 from cv_bridge import CvBridge
 
 from vision_pkg.geo_utils import camera_mount_matrix, pixel_to_world_cov, pixel_size_to_world
@@ -71,6 +72,10 @@ class VisionNode(Node):
         #   'size'  : 强制尺寸估距（必须设置 target_real_width）
         self.declare_parameter('distance_mode', 'auto')
         self.declare_parameter('target_real_width', 0.0)        # 目标真实宽度（米），0=未标定
+        # 迁移期兼容：新话题发 PoseWithCovarianceStamped，旧话题继续发 PoseStamped。
+        self.declare_parameter('publish_legacy', True)
+        self.declare_parameter('cov_topic', '/vision/target_pose_cov')
+        self.declare_parameter('legacy_topic', '/vision/target_pose')
         # 颜色检测阈值（默认红色靶机，HSV 双区间）
         self.declare_parameter('hsv_lower1', [0, 120, 70])
         self.declare_parameter('hsv_upper1', [10, 255, 255])
@@ -92,6 +97,9 @@ class VisionNode(Node):
         self.frame_skip = p('process_every_n_frames').value
         self.distance_mode = p('distance_mode').value
         self.target_real_width = p('target_real_width').value
+        self.publish_legacy = bool(p('publish_legacy').value)
+        self.cov_topic = str(p('cov_topic').value)
+        self.legacy_topic = str(p('legacy_topic').value)
         rpy = p('camera_mount_rpy').value
         self.R_bc = camera_mount_matrix(rpy[0], rpy[1], rpy[2])
 
@@ -136,7 +144,13 @@ class VisionNode(Node):
                 self._make_state_cb(drone_id), 10)
 
         # ------------------------------ 发布（接口A，唯一出口） ------------------------------
-        self.target_pub = self.create_publisher(PoseWithCovarianceStamped, '/vision/target_pose', 10)
+        # 新话题带协方差和测距模式；旧话题在迁移期继续发 PoseStamped。
+        self.target_pub = self.create_publisher(
+            PoseWithCovarianceStamped, self.cov_topic, 10)
+        self.legacy_pub = None
+        if self.publish_legacy:
+            self.legacy_pub = self.create_publisher(
+                PoseStamped, self.legacy_topic, 10)
 
         # ------------------------------ round_robin 轮转定时器 ------------------------------
         self._rr_index = 0
@@ -148,7 +162,7 @@ class VisionNode(Node):
                 f'轮转处理: {n} 路 x {self.per_stream_hz}Hz (定时器 {1.0/period:.1f}Hz)')
 
         self.get_logger().info(
-            f'vision_node 已启动：集群 {self.drone_ids}，发布 /vision/target_pose (ENU, world)')
+            f'vision_node 已启动：集群 {self.drone_ids}，发布 {self.cov_topic}；旧话题 {self.legacy_topic} publish_legacy={self.publish_legacy}')
 
     # ------------------------------ 回调工厂（闭包绑定 drone_id） ------------------------------
     def _make_image_cb(self, drone_id):
@@ -281,6 +295,16 @@ class VisionNode(Node):
         out.pose.pose.orientation.w = confidence
         out.pose.covariance = [float(x) for x in cov.flatten()]
         self.target_pub.publish(out)
+
+        # 迁移期旧消息：字段和旧接口一致，orientation.w 仍给 1.0。
+        if self.legacy_pub is not None:
+            legacy = PoseStamped()
+            legacy.header = out.header
+            legacy.pose.position.x = world_xyz[0]
+            legacy.pose.position.y = world_xyz[1]
+            legacy.pose.position.z = world_xyz[2]
+            legacy.pose.orientation.w = 1.0
+            self.legacy_pub.publish(legacy)
 
         self.get_logger().info(
             f'[{drone_id}] 捕获目标({mode_tag}) -> ENU: x={world_xyz[0]:.2f}, '

@@ -28,6 +28,12 @@ def generate_launch_description():
                 # {'distance_mode': 'auto'},       # auto / ground / size
                 # {'target_real_width': 0.5},      # 目标真实宽度(米)，标定后尺寸估距自动启用
                 #                                  # 启用后 orientation.w=0.5 标记估距结果
+                # {'ground_z': 0.0},               # 地面目标平面高度；空中目标不要用 ground 模式
+
+                # ===== 迁移期兼容：新话题带协方差，旧话题继续发 PoseStamped =====
+                # {'publish_legacy': True},                  # 下游迁移完再关
+                # {'cov_topic': '/vision/target_pose_cov'},
+                # {'legacy_topic': '/vision/target_pose'},
             ]
         )
     ])
