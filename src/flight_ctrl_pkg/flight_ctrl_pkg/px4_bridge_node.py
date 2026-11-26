@@ -33,7 +33,7 @@ from typing import Optional
 
 from diagnostic_msgs.msg import DiagnosticStatus, KeyValue
 import rclpy
-from geometry_msgs.msg import PoseStamped, Vector3
+from geometry_msgs.msg import PoseStamped, TwistStamped, Vector3
 from nav_msgs.msg import Odometry
 from px4_msgs.msg import (
     BatteryStatus,
@@ -74,8 +74,8 @@ _GIMBAL_FLAGS_HORIZON_LOCK = 4.0 + 8.0       # ROLL_LOCK | PITCH_LOCK (body-rela
 class Px4BridgeNode(Node):
     """基于 uXRCE-DDS 的 PX4 多机高机动飞控桥接节点。"""
 
-    def __init__(self) -> None:
-        super().__init__('px4_bridge_node')
+    def __init__(self, **kwargs) -> None:
+        super().__init__('px4_bridge_node', **kwargs)
 
         # -------------------- 参数声明 --------------------
         self.declare_parameter('drone_id', 'drone_1')
@@ -99,6 +99,13 @@ class Px4BridgeNode(Node):
         self.declare_parameter('use_vel_feedforward', True)
         self.declare_parameter('use_acc_feedforward', True)
         self.declare_parameter('max_yaw_rate_deg', 75.0)
+        self.declare_parameter('failsafe_rtl_alt', 18.0)
+        self.declare_parameter('failsafe_rtl_alt_step', 1.2)
+        self.declare_parameter('failsafe_rtl_speed', 5.5)
+        self.declare_parameter('failsafe_rtl_xy_tol', 0.45)
+        self.declare_parameter('failsafe_rtl_land_speed', 0.45)
+        self.declare_parameter('failsafe_auto_resume', False)
+        self.declare_parameter('failsafe_use_px4_rtl', False)
 
         p = self.get_parameter
         self.drone_id: str = p('drone_id').value
@@ -123,6 +130,13 @@ class Px4BridgeNode(Node):
         self.use_vel_feedforward: bool = bool(p('use_vel_feedforward').value)
         self.use_acc_feedforward: bool = bool(p('use_acc_feedforward').value)
         self.max_yaw_rate_rad: float = math.radians(max(float(p('max_yaw_rate_deg').value), 10.0))
+        self.failsafe_rtl_alt: float = max(float(p('failsafe_rtl_alt').value), 2.0)
+        self.failsafe_rtl_alt_step: float = max(float(p('failsafe_rtl_alt_step').value), 0.0)
+        self.failsafe_rtl_speed: float = max(float(p('failsafe_rtl_speed').value), 1.0)
+        self.failsafe_rtl_xy_tol: float = max(float(p('failsafe_rtl_xy_tol').value), 0.15)
+        self.failsafe_rtl_land_speed: float = max(float(p('failsafe_rtl_land_speed').value), 0.1)
+        self.failsafe_auto_resume: bool = bool(p('failsafe_auto_resume').value)
+        self.failsafe_use_px4_rtl: bool = bool(p('failsafe_use_px4_rtl').value)
 
         # -------------------- PX4 DDS QoS --------------------
         px4_qos = QoSProfile(
@@ -137,6 +151,12 @@ class Px4BridgeNode(Node):
             PoseStamped,
             f'/{self.drone_id}/fmu/in/trajectory_setpoint',
             self._target_callback,
+            10,
+        )
+        self.create_subscription(
+            TwistStamped,
+            f'/{self.drone_id}/fmu/in/trajectory_ff',
+            self._ff_callback,
             10,
         )
         self.create_subscription(
@@ -246,6 +266,8 @@ class Px4BridgeNode(Node):
         self.prev_tgt_ned: Optional[tuple] = None
         self.prev_tgt_time: float = 0.0
         self.tgt_vel_ned: tuple = (0.0, 0.0, 0.0)
+        self.latest_ff_ned: Optional[tuple] = None
+        self.last_ff_time: float = 0.0
         self.prev_vel_cmd_ned: tuple = (0.0, 0.0, 0.0)
         self.prev_acc_cmd_ned: tuple = (0.0, 0.0, 0.0)
 
@@ -260,15 +282,22 @@ class Px4BridgeNode(Node):
         self.land_brake_start: Optional[float] = None
         self.last_diag_pub_time: float = 0.0
 
-        # 状态机: GROUND -> ARMING -> AIRBORNE -> LANDING -> GROUND
+        # 状态机: GROUND -> ARMING -> AIRBORNE -> (FAILSAFE_RTL) -> LANDING -> GROUND
         self.flight_phase: str = 'GROUND'
         self.arm_tick_count: int = 0
         self.last_cmd_retry_time: float = 0.0
 
-        # 局部 NED 真实位置与影子平滑位置
+        # 局部 NED 真实位置、本次起飞原点与影子平滑位置
         self.real_n: float = 0.0
         self.real_e: float = 0.0
         self.real_d: float = 0.0
+        self.takeoff_n: float = 0.0
+        self.takeoff_e: float = 0.0
+        self.takeoff_d: float = 0.0
+        self.takeoff_recorded: bool = False
+        self.rtl_climb_n: float = 0.0
+        self.rtl_climb_e: float = 0.0
+        self.rtl_cmd_sent: bool = False
         self.home_d_offset: Optional[float] = None
         self.shadow_n: float = 0.0
         self.shadow_e: float = 0.0
@@ -330,8 +359,31 @@ class Px4BridgeNode(Node):
         if msg.data != self.current_action:
             self.current_action = msg.data
             self.tgt_vel_ned = (0.0, 0.0, 0.0)
+            self.latest_ff_ned = None
+            self.last_ff_time = 0.0
             self.prev_acc_cmd_ned = (0.0, 0.0, 0.0)
             self.get_logger().info(f'[{self.drone_id}] 动作切换 -> {self.current_action}')
+
+    def _ff_callback(self, msg: TwistStamped) -> None:
+        vx_enu = float(msg.twist.linear.x)
+        vy_enu = float(msg.twist.linear.y)
+        vz_enu = float(msg.twist.linear.z)
+        if not (math.isfinite(vx_enu) and math.isfinite(vy_enu) and math.isfinite(vz_enu)):
+            self.get_logger().warn(
+                f'[{self.drone_id}] 拒绝含 NaN/Inf 的速度前馈 trajectory_ff',
+                throttle_duration_sec=2.0,
+            )
+            return
+        # ENU (vx_east, vy_north, vz_up) -> NED (vn=vy_north, ve=vx_east, vd=-vz_up)
+        vn, ve, vd = vy_enu, vx_enu, -vz_enu
+        h = math.hypot(vn, ve)
+        v_cap = 16.0
+        if h > v_cap and h > 1e-6:
+            vn *= v_cap / h
+            ve *= v_cap / h
+        vd = max(-6.0, min(6.0, vd))
+        self.latest_ff_ned = (vn, ve, vd)
+        self.last_ff_time = time.time()
 
     def _heartbeat_callback(self, _msg: Empty) -> None:
         self.last_heartbeat_time = time.time()
@@ -368,6 +420,16 @@ class Px4BridgeNode(Node):
             self.shadow_n = self.real_n
             self.shadow_e = self.real_e
             self.shadow_d = self.real_d
+            if (
+                msg.xy_valid
+                and msg.z_valid
+                and self.vehicle_status is not None
+                and self.vehicle_status.arming_state == VehicleStatus.ARMING_STATE_DISARMED
+            ):
+                self.takeoff_n = self.real_n
+                self.takeoff_e = self.real_e
+                self.takeoff_d = self.real_d
+                self.takeoff_recorded = True
             if math.isfinite(msg.heading):
                 self.desired_yaw_ned = float(msg.heading)
         self._publish_enu_odometry()
@@ -494,6 +556,9 @@ class Px4BridgeNode(Node):
         if fs_breach or bat_warn >= 2:
             st.level = DiagnosticStatus.ERROR
             st.message = 'PX4 Failsafe Active'
+        elif self.flight_phase == 'FAILSAFE_RTL':
+            st.level = DiagnosticStatus.WARN
+            st.message = 'Failsafe RTL Active'
         elif not ekf_ok or fs_obl:
             st.level = DiagnosticStatus.WARN
             st.message = 'EKF / Offboard Warning'
@@ -510,6 +575,8 @@ class Px4BridgeNode(Node):
             KeyValue(key='geofence_breached', value=str(fs_breach)),
             KeyValue(key='gimbal_configured', value=str(self.gimbal_configured)),
             KeyValue(key='acc_ff', value=str(self.use_acc_feedforward)),
+            KeyValue(key='flight_phase', value=self.flight_phase),
+            KeyValue(key='failsafe_rtl_active', value=str(self.flight_phase == 'FAILSAFE_RTL')),
         ]
         self.fc_status_pub.publish(st)
 
@@ -656,8 +723,146 @@ class Px4BridgeNode(Node):
     def _land(self) -> None:
         self._publish_vehicle_command(VehicleCommand.VEHICLE_CMD_NAV_LAND)
 
+    def _rtl_px4(self) -> None:
+        self._publish_vehicle_command(VehicleCommand.VEHICLE_CMD_NAV_RETURN_TO_LAUNCH)
+
     def _disarm(self) -> None:
         self._publish_vehicle_command(VehicleCommand.VEHICLE_CMD_COMPONENT_ARM_DISARM, param1=0.0)
+
+    def _reset_to_ground(self, reset_mode: bool = True) -> None:
+        self.flight_phase = 'GROUND'
+        self.latest_target = None
+        self.latest_ff_ned = None
+        self.prev_tgt_ned = None
+        self.tgt_vel_ned = (0.0, 0.0, 0.0)
+        self.prev_vel_cmd_ned = (0.0, 0.0, 0.0)
+        self.prev_acc_cmd_ned = (0.0, 0.0, 0.0)
+        self.land_brake_start = None
+        self.rtl_cmd_sent = False
+        self.arm_tick_count = 0
+        self.last_heartbeat_time = 0.0
+        if reset_mode:
+            self._publish_vehicle_command(
+                VehicleCommand.VEHICLE_CMD_DO_SET_MODE, param1=1.0, param2=4.0, param3=3.0
+            )
+
+    def _handle_failsafe_rtl(self, now: float) -> None:
+        """Guide vehicle smoothly back to recorded takeoff origin before landing."""
+        if self.vehicle_status.arming_state == VehicleStatus.ARMING_STATE_DISARMED:
+            self._reset_to_ground(reset_mode=True)
+            self.get_logger().info(f'[{self.drone_id}] 失控返航已触地并 disarm，回到 GROUND 待命')
+            return
+
+        if (
+            self.failsafe_auto_resume
+            and self.last_heartbeat_time > 0.0
+            and (now - self.last_heartbeat_time) <= 0.5 * self.heartbeat_timeout
+            and self.latest_target is not None
+            and (now - self.last_target_time) <= 0.5
+            and self.vehicle_status.nav_state == VehicleStatus.NAVIGATION_STATE_OFFBOARD
+        ):
+            self.flight_phase = 'AIRBORNE'
+            self.rtl_cmd_sent = False
+            self.land_brake_start = None
+            self.get_logger().info(f'[{self.drone_id}] 中枢心跳与设定点已恢复，退出失控返航恢复正常飞控')
+            return
+
+        nav_state = self.vehicle_status.nav_state
+        if self.failsafe_use_px4_rtl or nav_state != VehicleStatus.NAVIGATION_STATE_OFFBOARD:
+            if nav_state not in (
+                VehicleStatus.NAVIGATION_STATE_AUTO_RTL,
+                VehicleStatus.NAVIGATION_STATE_AUTO_LAND,
+            ):
+                if not self.rtl_cmd_sent or (now - self.last_cmd_retry_time > 1.0):
+                    self.last_cmd_retry_time = now
+                    self.rtl_cmd_sent = True
+                    self._rtl_px4()
+            return
+
+        self._publish_offboard_control_mode()
+        dn = self.takeoff_n - self.real_n
+        de = self.takeoff_e - self.real_e
+        d_xy = math.hypot(dn, de)
+        h_spd = math.hypot(self.local_pos.vx, self.local_pos.vy)
+
+        if d_xy <= self.failsafe_rtl_xy_tol:
+            if self.land_brake_start is None:
+                self.land_brake_start = now
+            if h_spd <= self.failsafe_rtl_land_speed or (now - self.land_brake_start) >= 2.0:
+                self.land_brake_start = None
+                self.flight_phase = 'LANDING'
+                self.last_cmd_retry_time = now
+                self._land()
+                self.get_logger().info(
+                    f'[{self.drone_id}] 失控返航已抵达起飞点 (误差={d_xy:.2f}m)，切换 PX4 自动降落'
+                )
+                return
+        else:
+            self.land_brake_start = None
+
+        stagger_alt = self.failsafe_rtl_alt + self.failsafe_rtl_alt_step * max(
+            self.target_system_id - 1, 0
+        )
+        cur_alt = -(self.real_d - self.takeoff_d)
+        cruise_alt = min(38.0, max(cur_alt, stagger_alt))
+        cruise_d = self.takeoff_d - cruise_alt
+
+        if d_xy > 1.5 and cur_alt < (stagger_alt - 1.0):
+            tgt_n, tgt_e, tgt_d = self.rtl_climb_n, self.rtl_climb_e, cruise_d
+        elif d_xy > 1.5:
+            tgt_n, tgt_e, tgt_d = self.takeoff_n, self.takeoff_e, cruise_d
+        elif d_xy > self.failsafe_rtl_xy_tol:
+            final_alt = min(cruise_alt, max(4.0, cur_alt - 1.5 if h_spd <= 0.8 else cur_alt))
+            tgt_n, tgt_e, tgt_d = self.takeoff_n, self.takeoff_e, self.takeoff_d - final_alt
+        else:
+            tgt_n, tgt_e, tgt_d = self.takeoff_n, self.takeoff_e, self.real_d
+
+        yawspeed_cmd = 0.0
+        if self.align_yaw and d_xy > 0.6:
+            target_yaw = math.atan2(de, dn)
+            yawspeed_cmd = compute_yawspeed_ned(
+                self.desired_yaw_ned,
+                target_yaw,
+                tau=0.42,
+                max_yaw_rate_rad=self.max_yaw_rate_rad,
+            )
+            self.desired_yaw_ned = slew_yaw_ned(
+                self.desired_yaw_ned,
+                target_yaw,
+                self.max_yaw_rate_rad * self.dt,
+            )
+
+        (self.shadow_n, self.shadow_e, self.shadow_d), vel_cmd, acc_cmd = compute_shadow_ff_accel(
+            (self.shadow_n, self.shadow_e, self.shadow_d),
+            (self.real_n, self.real_e, self.real_d),
+            (tgt_n, tgt_e, tgt_d),
+            (0.0, 0.0, 0.0),
+            self.prev_vel_cmd_ned,
+            self.prev_acc_cmd_ned,
+            dt=self.dt,
+            max_step=self.failsafe_rtl_speed * self.dt,
+            max_tether=2.0,
+            max_speed=self.failsafe_rtl_speed,
+            gain_p=1.2,
+            deadband_m=0.08,
+            max_vz_up=3.2,
+            max_vz_dn=2.5,
+            max_acc_hor=6.0,
+            max_acc_vert=4.0,
+        )
+        self.prev_vel_cmd_ned = vel_cmd
+        self.prev_acc_cmd_ned = acc_cmd
+
+        offset_d = self.home_d_offset if self.home_d_offset is not None else 0.0
+        self._publish_trajectory_setpoint(
+            self.shadow_n,
+            self.shadow_e,
+            self.shadow_d + offset_d,
+            self.desired_yaw_ned,
+            vel_ned=vel_cmd,
+            acc_ned=acc_cmd,
+            yawspeed_ned=yawspeed_cmd,
+        )
 
     def _select_max_speed(self) -> float:
         if self.current_action == 'ATTACK':
@@ -680,22 +885,60 @@ class Px4BridgeNode(Node):
         self._publish_fc_diagnostics(now)
         self._update_px4_gimbal(now)
 
-        # 1. 心跳看门狗：中枢失联则切 Land 降落
+        # 1. 心跳看门狗：中枢失联触发失控返航（飞回起飞点），不再原地直接降落
         if (
             self.last_heartbeat_time > 0.0
             and (now - self.last_heartbeat_time > self.heartbeat_timeout)
             and self.flight_phase in ('ARMING', 'AIRBORNE')
         ):
+            on_ground_prelaunch = (
+                self.flight_phase == 'ARMING'
+                and (
+                    self.vehicle_status.arming_state == VehicleStatus.ARMING_STATE_DISARMED
+                    or self.real_d > self.takeoff_d - 0.35
+                )
+            )
+            self.latest_target = None
+            self.latest_ff_ned = None
+            self.tgt_vel_ned = (0.0, 0.0, 0.0)
+            self.land_brake_start = None
+            if on_ground_prelaunch:
+                self.get_logger().warn(
+                    f'[{self.drone_id}] 地面预流期心跳失联 ({self.heartbeat_timeout:.1f}s)，中止起飞退回 GROUND',
+                    throttle_duration_sec=1.0,
+                )
+                if self.vehicle_status.arming_state != VehicleStatus.ARMING_STATE_DISARMED:
+                    self._disarm()
+                self._reset_to_ground(reset_mode=False)
+                return
+
+            if not self.takeoff_recorded:
+                self.takeoff_n, self.takeoff_e, self.takeoff_d = (0.0, 0.0, 0.0)
+                self.takeoff_recorded = True
+
+            self.flight_phase = 'FAILSAFE_RTL'
+            self.rtl_climb_n = self.real_n
+            self.rtl_climb_e = self.real_e
+            self.rtl_cmd_sent = False
+            self.current_action = 'RETURN'
+            self.prev_tgt_ned = None
+            self.last_cmd_retry_time = 0.0
             self.get_logger().error(
-                f'[{self.drone_id}] 中枢心跳失联超过 {self.heartbeat_timeout:.1f}s，触发强制降落！',
+                f'[{self.drone_id}] 中枢心跳失联超过 {self.heartbeat_timeout:.1f}s，触发失控返航 -> '
+                f'起飞点 ({self.takeoff_n:.2f}, {self.takeoff_e:.2f})！',
                 throttle_duration_sec=1.0,
             )
-            self.flight_phase = 'LANDING'
-            self.latest_target = None
-            self._land()
+            if self.failsafe_use_px4_rtl:
+                self._rtl_px4()
+                self.rtl_cmd_sent = True
             return
 
-        # 2. 目标保鲜期检查：超 2 秒无新坐标则清空旧目标原地悬停
+        # 2. 失控返航态（飞回记录的起飞原点后再降落）
+        if self.flight_phase == 'FAILSAFE_RTL':
+            self._handle_failsafe_rtl(now)
+            return
+
+        # 3. 目标保鲜期检查：超 2 秒无新坐标则清空旧目标原地悬停
         if self.latest_target is not None and (now - self.last_target_time > self.target_fresh_timeout):
             self.latest_target = None
             self.get_logger().warn(
@@ -703,7 +946,7 @@ class Px4BridgeNode(Node):
                 throttle_duration_sec=2.0,
             )
 
-        # 3. 地面待命态（EKF 对齐门禁 + Offboard 预流）
+        # 4. 地面待命态（EKF 对齐门禁 + Offboard 预流）
         if self.flight_phase == 'GROUND':
             if self.latest_target is not None and self.latest_target.pose.position.z >= 0.3:
                 ekf_ready = True
@@ -718,11 +961,18 @@ class Px4BridgeNode(Node):
                 self.shadow_n = self.real_n
                 self.shadow_e = self.real_e
                 self.shadow_d = self.real_d
+                self.takeoff_n = self.real_n
+                self.takeoff_e = self.real_e
+                self.takeoff_d = self.real_d
+                self.takeoff_recorded = True
+                self.rtl_cmd_sent = False
                 self.prev_vel_cmd_ned = (0.0, 0.0, 0.0)
                 self.prev_acc_cmd_ned = (0.0, 0.0, 0.0)
                 self.arm_tick_count = 0
                 self.flight_phase = 'ARMING'
-                self.get_logger().info(f'[{self.drone_id}] 收到首个起飞目标，开始预流并切入 Offboard...')
+                self.get_logger().info(
+                    f'[{self.drone_id}] 收到首个起飞目标 (原点={self.takeoff_n:.2f},{self.takeoff_e:.2f})，开始预流并切入 Offboard...'
+                )
             return
 
         # 4. 预流与解锁态
@@ -839,9 +1089,12 @@ class Px4BridgeNode(Node):
                     gain_p, deadband_m, max_tether, vz_up, vz_dn = 0.40, 0.22, 0.9, 3.0, 2.5
                     max_ah, max_av = 5.0, 3.5
 
-                vel_ff_base = (
-                    self.tgt_vel_ned if (now - self.last_target_time) < 0.35 else (0.0, 0.0, 0.0)
-                )
+                if self.latest_ff_ned is not None and (now - self.last_ff_time) <= 0.22:
+                    vel_ff_base = self.latest_ff_ned
+                elif (now - self.last_target_time) < 0.35:
+                    vel_ff_base = self.tgt_vel_ned
+                else:
+                    vel_ff_base = (0.0, 0.0, 0.0)
                 (self.shadow_n, self.shadow_e, self.shadow_d), vel_cmd, acc_cmd = compute_shadow_ff_accel(
                     (self.shadow_n, self.shadow_e, self.shadow_d),
                     (self.real_n, self.real_e, self.real_d),
@@ -875,19 +1128,10 @@ class Px4BridgeNode(Node):
             )
             return
 
-        # 6. 降落与自动上锁态
+        # 7. 降落与自动上锁态
         if self.flight_phase == 'LANDING':
             if self.vehicle_status.arming_state == VehicleStatus.ARMING_STATE_DISARMED:
-                self.flight_phase = 'GROUND'
-                self.latest_target = None
-                self.prev_tgt_ned = None
-                self.tgt_vel_ned = (0.0, 0.0, 0.0)
-                self.prev_vel_cmd_ned = (0.0, 0.0, 0.0)
-                self.prev_acc_cmd_ned = (0.0, 0.0, 0.0)
-                self.last_heartbeat_time = 0.0
-                self._publish_vehicle_command(
-                    VehicleCommand.VEHICLE_CMD_DO_SET_MODE, param1=1.0, param2=4.0, param3=3.0
-                )
+                self._reset_to_ground(reset_mode=True)
                 self.get_logger().info(f'[{self.drone_id}] 已安全触地并 disarm，回到 GROUND 待命')
                 return
 

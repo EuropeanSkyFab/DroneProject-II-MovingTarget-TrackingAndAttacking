@@ -170,6 +170,11 @@ def main() -> None:
     make_helipad('H1', 'helipad_h1.png')
     make_helipad('H2', 'helipad_h2.png')
     make_helipad('H3', 'helipad_h3.png')
+    make_helipad('H4', 'helipad_h4.png')
+    make_helipad('H5', 'helipad_h5.png')
+    make_helipad('H6', 'helipad_h6.png')
+    make_helipad('H7', 'helipad_h7.png')
+    make_helipad('H8', 'helipad_h8.png')
     make_architecture_textures()
     print(f'Generated textures in {OUT_DIR}:', sorted(os.listdir(OUT_DIR)))
 

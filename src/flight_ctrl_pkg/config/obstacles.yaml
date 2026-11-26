@@ -1,0 +1,211 @@
+# Shared 3D Arena, Helipad, Obstacle & No-Fly-Zone Registry (Global ENU, frame_id="world")
+# Single source of truth for urban_counter_swarm_arena.sdf <collision> geometry, planning_pkg, and center_node_pkg CBF.
+
+arena_bounds:
+  x_min: -16.0
+  x_max: 96.0
+  y_min: -34.0
+  y_max: 34.0
+  z_min: 0.0
+  z_max: 45.0
+
+helipads:
+  - id: "H1"
+    drone_id: "drone_1"
+    x: 0.0
+    y: 0.0
+    z: 0.0
+    yaw: 0.0
+  - id: "H2"
+    drone_id: "drone_2"
+    x: 0.0
+    y: 3.0
+    z: 0.0
+    yaw: 0.0
+  - id: "H3"
+    drone_id: "drone_3"
+    x: 0.0
+    y: 6.0
+    z: 0.0
+    yaw: 0.0
+  - id: "H4"
+    drone_id: "drone_4"
+    x: -4.0
+    y: 0.0
+    z: 0.0
+    yaw: 0.0
+  - id: "H5"
+    drone_id: "drone_5"
+    x: -4.0
+    y: 3.0
+    z: 0.0
+    yaw: 0.0
+  - id: "H6"
+    drone_id: "drone_6"
+    x: -4.0
+    y: 6.0
+    z: 0.0
+    yaw: 0.0
+  - id: "H7"
+    drone_id: "drone_7"
+    x: 0.0
+    y: -3.5
+    z: 0.0
+    yaw: 0.0
+  - id: "H8"
+    drone_id: "drone_8"
+    x: -4.0
+    y: -3.5
+    z: 0.0
+    yaw: 0.0
+
+obstacles:
+  - id: "obs_radar_tower"
+    type: "cylinder"
+    cx: -7.0
+    cy: 16.5
+    z_min: 0.0
+    z_max: 15.0
+    radius: 2.0
+    safety_margin_m: 1.5
+    visual_style: "radar_control_tower"
+
+  - id: "obs_container_depot_nw"
+    type: "box"
+    cx: 5.5
+    cy: 15.5
+    z_min: 0.0
+    z_max: 5.2
+    sx: 6.0
+    sy: 5.2
+    safety_margin_m: 1.2
+    visual_style: "containers_stacked_blue"
+
+  - id: "obs_hangar_north"
+    type: "box"
+    cx: 21.0
+    cy: 19.5
+    z_min: 0.0
+    z_max: 6.2
+    sx: 11.0
+    sy: 6.4
+    safety_margin_m: 1.5
+    visual_style: "hangar_solar"
+
+  - id: "obs_hangar_south"
+    type: "box"
+    cx: 16.0
+    cy: -16.5
+    z_min: 0.0
+    z_max: 5.8
+    sx: 10.0
+    sy: 6.0
+    safety_margin_m: 1.5
+    visual_style: "hangar_maintenance"
+
+  - id: "obs_fuel_depot_se"
+    type: "box"
+    cx: 31.5
+    cy: -21.0
+    z_min: 0.0
+    z_max: 4.0
+    sx: 6.4
+    sy: 4.2
+    safety_margin_m: 1.5
+    visual_style: "industrial_depot_slate"
+
+  - id: "obs_canyon_tower_nw"
+    type: "box"
+    cx: 36.0
+    cy: 10.5
+    z_min: 0.0
+    z_max: 14.0
+    sx: 5.0
+    sy: 5.0
+    safety_margin_m: 1.5
+    visual_style: "urban_highrise_glass"
+
+  - id: "obs_canyon_tower_sw"
+    type: "box"
+    cx: 36.0
+    cy: -9.5
+    z_min: 0.0
+    z_max: 12.5
+    sx: 5.0
+    sy: 5.0
+    safety_margin_m: 1.5
+    visual_style: "urban_highrise_concrete"
+
+  - id: "obs_comm_pylon_center"
+    type: "cylinder"
+    cx: 49.0
+    cy: 1.5
+    z_min: 0.0
+    z_max: 16.5
+    radius: 1.4
+    safety_margin_m: 1.6
+    visual_style: "comms_lattice_pylon"
+
+  - id: "obs_bunker_mid_n"
+    type: "box"
+    cx: 58.0
+    cy: 15.5
+    z_min: 0.0
+    z_max: 7.5
+    sx: 7.0
+    sy: 5.4
+    safety_margin_m: 1.5
+    visual_style: "command_bunker"
+
+  - id: "obs_cooling_silo_s"
+    type: "cylinder"
+    cx: 56.0
+    cy: -14.0
+    z_min: 0.0
+    z_max: 11.0
+    radius: 2.8
+    safety_margin_m: 1.5
+    visual_style: "industrial_silo"
+
+  - id: "obs_east_watchtower"
+    type: "cylinder"
+    cx: 71.0
+    cy: 6.5
+    z_min: 0.0
+    z_max: 14.5
+    radius: 1.8
+    safety_margin_m: 1.5
+    visual_style: "radar_relay_tower"
+
+  - id: "obs_east_warehouse"
+    type: "box"
+    cx: 72.0
+    cy: -8.5
+    z_min: 0.0
+    z_max: 6.8
+    sx: 8.0
+    sy: 5.6
+    safety_margin_m: 1.5
+    visual_style: "hangar_industrial"
+
+no_fly_zones:
+  - id: "nfz_radar_emitter"
+    cx: -7.0
+    cy: 16.5
+    z_min: 0.0
+    z_max: 25.0
+    radius: 4.5
+
+  - id: "nfz_command_core"
+    cx: 58.0
+    cy: 15.5
+    z_min: 0.0
+    z_max: 25.0
+    radius: 6.0
+
+  - id: "nfz_south_hangar"
+    cx: 16.0
+    cy: -16.5
+    z_min: 0.0
+    z_max: 20.0
+    radius: 6.5

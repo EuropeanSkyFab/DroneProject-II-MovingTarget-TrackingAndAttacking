@@ -133,7 +133,11 @@
     <model name="proving_ground_scenery">
       <static>true</static>
       <link name="link">
-        <!-- 北侧主机库 + 太阳能屋顶 -->
+        <!-- 北侧主机库 + 太阳能屋顶（位于 [9,33]x[-5,10] 航线走廊外，带物理碰撞） -->
+        <collision name="hangar_1_collision">
+          <pose>22.0 16.0 2.25 0 0 0</pose>
+          <geometry><box><size>9.4 6.0 4.5</size></box></geometry>
+        </collision>
         <visual name="hangar_1_body">
           <pose>22.0 16.0 2.1 0 0 0</pose>
           <geometry><box><size>9.0 5.5 4.2</size></box></geometry>
@@ -157,6 +161,10 @@
         </visual>
 
         <!-- 东侧维修机库 -->
+        <collision name="hangar_2_collision">
+          <pose>41.0 2.0 2.05 0 0 1.570796</pose>
+          <geometry><box><size>8.4 5.4 4.1</size></box></geometry>
+        </collision>
         <visual name="hangar_2_body">
           <pose>41.0 2.0 1.9 0 0 1.570796</pose>
           <geometry><box><size>8.0 5.0 3.8</size></box></geometry>
@@ -175,6 +183,10 @@
         </visual>
 
         <!-- 货运集装箱组（蓝/黄高对比地标，无红色，显式设置 ambient/diffuse 确保 PBR 非黑） -->
+        <collision name="container_1_collision">
+          <pose>11.0 15.5 1.3 0 0 0.15</pose>
+          <geometry><box><size>6.0 2.45 2.6</size></box></geometry>
+        </collision>
         <visual name="container_1">
           <pose>11.0 15.5 1.3 0 0 0.15</pose>
           <geometry><box><size>6.0 2.45 2.6</size></box></geometry>
@@ -183,6 +195,10 @@
             <pbr><metal><albedo_map>model://arena_assets/materials/textures/container_blue.png</albedo_map><roughness>0.55</roughness></metal></pbr>
           </material>
         </visual>
+        <collision name="container_2_collision">
+          <pose>11.2 12.6 1.3 0 0 0.08</pose>
+          <geometry><box><size>6.0 2.45 2.6</size></box></geometry>
+        </collision>
         <visual name="container_2">
           <pose>11.2 12.6 1.3 0 0 0.08</pose>
           <geometry><box><size>6.0 2.45 2.6</size></box></geometry>
@@ -191,6 +207,10 @@
             <pbr><metal><albedo_map>model://arena_assets/materials/textures/container_ochre.png</albedo_map><roughness>0.55</roughness></metal></pbr>
           </material>
         </visual>
+        <collision name="container_3_collision">
+          <pose>18.0 -9.5 1.3 0 0 -0.2</pose>
+          <geometry><box><size>6.0 2.45 2.6</size></box></geometry>
+        </collision>
         <visual name="container_3">
           <pose>18.0 -9.5 1.3 0 0 -0.2</pose>
           <geometry><box><size>6.0 2.45 2.6</size></box></geometry>
@@ -307,6 +327,10 @@
       <link name="tower_base">
         <gravity>false</gravity>
         <inertial><mass>500</mass><inertia><ixx>100</ixx><iyy>100</iyy><izz>100</izz></inertia></inertial>
+        <collision name="collision">
+          <pose>0 0 3.1 0 0 0</pose>
+          <geometry><cylinder><radius>1.8</radius><length>6.2</length></cylinder></geometry>
+        </collision>
         <visual name="shaft">
           <pose>0 0 2.4 0 0 0</pose>
           <geometry><box><size>1.8 1.8 4.8</size></box></geometry>

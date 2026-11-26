@@ -7,29 +7,81 @@ case $- in
     *u*) _had_nounset=1; set +u ;;
 esac
 
-# 1. 清理可能继承自宿主终端的 ROS 1 环境变量
-unset ROS_DISTRO ROS_VERSION ROS_PACKAGE_PATH ROS_ROOT ROS_MASTER_URI ROS_IP ROS_HOSTNAME ROSLISP_PACKAGE_DIRECTORIES ROS_ETC_DIR
+# 保存调用方显式指定的 DDS 域与回环隔离变量（防止 conda 钩子覆盖）
+_CALLER_ROS_DOMAIN_ID="${ROS_DOMAIN_ID:-}"
+_CALLER_ROS_LOCALHOST_ONLY="${ROS_LOCALHOST_ONLY:-}"
 
-# 2. 激活 Conda px4_ros2（若不存在则回退到系统 ROS 2 Humble）
-_CONDA_SH=""
-for _cand in "$HOME/miniconda3/etc/profile.d/conda.sh" "$HOME/anaconda3/etc/profile.d/conda.sh"; do
-    if [ -f "$_cand" ]; then
-        _CONDA_SH="$_cand"
-        break
+# 1. 清理可能继承自宿主终端的 ROS 1 环境变量与路径污染
+unset ROS_VERSION ROS_PACKAGE_PATH ROS_ROOT ROS_MASTER_URI ROS_IP ROS_HOSTNAME ROSLISP_PACKAGE_DIRECTORIES ROS_ETC_DIR
+if [ "${ROS_DISTRO:-}" = "noetic" ]; then
+    unset ROS_DISTRO
+fi
+_strip_ros1_paths() {
+    local var_val="${1:-}"
+    local out=""
+    local p
+    local IFS=":"
+    for p in $var_val; do
+        case "$p" in
+            ""|/opt/ros/noetic*|*ApexNav*) ;;
+            *) out="${out:+${out}:}${p}" ;;
+        esac
+    done
+    printf "%s" "$out"
+}
+export PATH="$(_strip_ros1_paths "${PATH:-}")"
+export LD_LIBRARY_PATH="$(_strip_ros1_paths "${LD_LIBRARY_PATH:-}")"
+export PYTHONPATH="$(_strip_ros1_paths "${PYTHONPATH:-}")"
+export CMAKE_PREFIX_PATH="$(_strip_ros1_paths "${CMAKE_PREFIX_PATH:-}")"
+export AMENT_PREFIX_PATH="$(_strip_ros1_paths "${AMENT_PREFIX_PATH:-}")"
+export COLCON_PREFIX_PATH="$(_strip_ros1_paths "${COLCON_PREFIX_PATH:-}")"
+export PKG_CONFIG_PATH="$(_strip_ros1_paths "${PKG_CONFIG_PATH:-}")"
+unset -f _strip_ros1_paths
+
+# 2. 激活 Conda px4_ros2（若已处于 px4_ros2 则仅确保 site-packages 与 bin 位于最前）
+if [ "${CONDA_DEFAULT_ENV:-}" = "px4_ros2" ] && [ -n "${CONDA_PREFIX:-}" ] && [ -d "${CONDA_PREFIX}/bin" ]; then
+    case ":${PATH}:" in
+        "${CONDA_PREFIX}/bin:"*) ;;
+        *) export PATH="${CONDA_PREFIX}/bin:${PATH}" ;;
+    esac
+    if [ -d "${CONDA_PREFIX}/lib/python3.11/site-packages" ]; then
+        case ":${PYTHONPATH:-}:" in
+            *":${CONDA_PREFIX}/lib/python3.11/site-packages:"*) ;;
+            *) export PYTHONPATH="${CONDA_PREFIX}/lib/python3.11/site-packages${PYTHONPATH:+:${PYTHONPATH}}" ;;
+        esac
     fi
-done
-if [ -n "$_CONDA_SH" ]; then
-    # shellcheck disable=SC1090
-    source "$_CONDA_SH"
-    if conda env list 2>/dev/null | awk '{print $1}' | grep -qx "px4_ros2"; then
-        conda activate px4_ros2
+    export ROS_DISTRO="${ROS_DISTRO:-humble}"
+    export ROS_VERSION=2
+    export ROS_PYTHON_VERSION=3
+    export ROS_OS_OVERRIDE="conda:linux"
+    export ROS_ETC_DIR="${CONDA_PREFIX}/etc/ros"
+    case ":${AMENT_PREFIX_PATH:-}:" in
+        *":${CONDA_PREFIX}:"*) ;;
+        *) export AMENT_PREFIX_PATH="${AMENT_PREFIX_PATH:+${AMENT_PREFIX_PATH}:}${CONDA_PREFIX}" ;;
+    esac
+else
+    _CONDA_SH=""
+    for _cand in "$HOME/miniconda3/etc/profile.d/conda.sh" "$HOME/anaconda3/etc/profile.d/conda.sh"; do
+        if [ -f "$_cand" ]; then
+            _CONDA_SH="$_cand"
+            break
+        fi
+    done
+    if [ -n "$_CONDA_SH" ]; then
+        # shellcheck disable=SC1090
+        source "$_CONDA_SH"
+        _CONDA_BASE="$(dirname "$(dirname "$(dirname "$_CONDA_SH")")")"
+        if [ -d "$_CONDA_BASE/envs/px4_ros2" ]; then
+            conda activate px4_ros2
+        elif [ -f "/opt/ros/${ROS_DISTRO:-humble}/setup.bash" ]; then
+            # shellcheck disable=SC1090
+            source "/opt/ros/${ROS_DISTRO:-humble}/setup.bash"
+        fi
+        unset _CONDA_BASE
     elif [ -f "/opt/ros/${ROS_DISTRO:-humble}/setup.bash" ]; then
         # shellcheck disable=SC1090
         source "/opt/ros/${ROS_DISTRO:-humble}/setup.bash"
     fi
-elif [ -f "/opt/ros/${ROS_DISTRO:-humble}/setup.bash" ]; then
-    # shellcheck disable=SC1090
-    source "/opt/ros/${ROS_DISTRO:-humble}/setup.bash"
 fi
 
 # 3. 自动定位 ros2_ws 与上层根目录，加载 px4_msgs 与课题二主工作空间
@@ -81,9 +133,15 @@ if [ -z "${PX4_AUTOPILOT_DIR:-}" ] || [ ! -d "${PX4_AUTOPILOT_DIR}" ]; then
     done
 fi
 export PX4_AUTOPILOT_DIR="${PX4_AUTOPILOT_DIR:-$FLYING_ROOT/third_party/PX4-Autopilot}"
-export ROS_DOMAIN_ID="${ROS_DOMAIN_ID:-0}"
-export ROS_LOCALHOST_ONLY="${ROS_LOCALHOST_ONLY:-0}"
-unset _CONDA_SH _cand _ENV_SCRIPT_DIR _probe _px4_dir
+export ROS_DOMAIN_ID="${_CALLER_ROS_DOMAIN_ID:-${ROS_DOMAIN_ID:-0}}"
+export ROS_LOCALHOST_ONLY="${_CALLER_ROS_LOCALHOST_ONLY:-${ROS_LOCALHOST_ONLY:-0}}"
+
+if [ -f "$_ENV_SCRIPT_DIR/gpu3_guard.sh" ]; then
+    # shellcheck disable=SC1091
+    GPU3_GUARD_HEADLESS="${GPU3_GUARD_HEADLESS:-0}" source "$_ENV_SCRIPT_DIR/gpu3_guard.sh"
+fi
+
+unset _CONDA_SH _cand _ENV_SCRIPT_DIR _probe _px4_dir _CALLER_ROS_DOMAIN_ID _CALLER_ROS_LOCALHOST_ONLY
 
 if [ "$_had_nounset" -eq 1 ]; then
     set -u

@@ -48,9 +48,43 @@
       <pose relative_to="base_link">0 0 0 0 0 0</pose>
     </joint>
 
-    <!-- 2. PX4 原生三轴稳像光电吊舱（由 PX4 gimbal 模块 + SIM_GZ_SV_FUNC1/2/3 物理伺服驱动） -->
+    <!-- 1B. Interceptor Cyan Navigation Strobes (non-red/amber, HSV-safe) -->
+    <link name="nav_strobes_link">
+      <pose relative_to="base_link">0 0 0 0 0 0</pose>
+      <inertial>
+        <mass>0.001</mass>
+        <inertia><ixx>1e-6</ixx><iyy>1e-6</iyy><izz>1e-6</izz></inertia>
+      </inertial>
+      <visual name="strobe_fl">
+        <pose>0.174 0.174 0.012 0 0 0</pose>
+        <geometry><sphere><radius>0.014</radius></sphere></geometry>
+        <material><ambient>0.04 0.55 0.90 1</ambient><diffuse>0.04 0.65 0.95 1</diffuse><emissive>0.05 0.72 1.0 1</emissive></material>
+      </visual>
+      <visual name="strobe_fr">
+        <pose>0.174 -0.174 0.012 0 0 0</pose>
+        <geometry><sphere><radius>0.014</radius></sphere></geometry>
+        <material><ambient>0.04 0.55 0.90 1</ambient><diffuse>0.04 0.65 0.95 1</diffuse><emissive>0.05 0.72 1.0 1</emissive></material>
+      </visual>
+      <visual name="strobe_rl">
+        <pose>-0.174 0.174 0.012 0 0 0</pose>
+        <geometry><sphere><radius>0.014</radius></sphere></geometry>
+        <material><ambient>0.04 0.55 0.90 1</ambient><diffuse>0.04 0.65 0.95 1</diffuse><emissive>0.05 0.72 1.0 1</emissive></material>
+      </visual>
+      <visual name="strobe_rr">
+        <pose>-0.174 -0.174 0.012 0 0 0</pose>
+        <geometry><sphere><radius>0.014</radius></sphere></geometry>
+        <material><ambient>0.04 0.55 0.90 1</ambient><diffuse>0.04 0.65 0.95 1</diffuse><emissive>0.05 0.72 1.0 1</emissive></material>
+      </visual>
+    </link>
+    <joint name="NavStrobesJoint" type="fixed">
+      <parent>base_link</parent>
+      <child>nav_strobes_link</child>
+      <pose relative_to="base_link">0 0 0 0 0 0</pose>
+    </joint>
+
+    <!-- 2. PX4 原生三轴稳像光电吊舱（后移至 x=0.0 确保永不遮挡 down_cam 视野） -->
     <link name="gimbal_yaw_link">
-      <pose relative_to="base_link">0.05 0.0 -0.08 0 0 0</pose>
+      <pose relative_to="base_link">0.0 0.0 -0.08 0 0 0</pose>
       <inertial>
         <mass>0.005</mass>
         <inertia>
@@ -168,6 +202,29 @@
         <update_rate>25</update_rate>
         <visualize>false</visualize>
       </sensor>
+      <sensor name="thermal_cam" type="thermal">
+        <pose>0.032 0.015 0 0 0 0</pose>
+        <camera>
+          <horizontal_fov>0.82</horizontal_fov>
+          <image>
+            <width>320</width>
+            <height>240</height>
+            <format>L8</format>
+          </image>
+          <clip>
+            <near>0.1</near>
+            <far>1500</far>
+          </clip>
+        </camera>
+        <always_on>1</always_on>
+        <update_rate>15</update_rate>
+        <visualize>false</visualize>
+        <plugin filename="gz-sim-thermal-sensor-system" name="gz::sim::systems::ThermalSensor">
+          <min_temp>273.15</min_temp>
+          <max_temp>373.15</max_temp>
+          <resolution>0.5</resolution>
+        </plugin>
+      </sensor>
     </link>
     <joint name="servo_0" type="revolute">
       <parent>gimbal_roll_link</parent>
@@ -206,6 +263,29 @@
       <sub_topic>servo_2</sub_topic>
       <p_gain>16.0</p_gain>
       <d_gain>0.6</d_gain>
+    </plugin>
+    <plugin filename="gz-sim-breadcrumbs-system" name="gz::sim::systems::Breadcrumbs">
+      <topic>breadcrumb/deploy</topic>
+      <max_deployments>40</max_deployments>
+      <disable_physics_time>0.0</disable_physics_time>
+      <allow_renaming>true</allow_renaming>
+      <breadcrumb>
+        <sdf version="1.9">
+          <model name="trail_crumb">
+            <static>true</static>
+            <link name="link">
+              <visual name="visual">
+                <geometry><sphere><radius>0.07</radius></sphere></geometry>
+                <material>
+                  <ambient>0.0 0.85 1.0 0.85</ambient>
+                  <diffuse>0.0 0.90 1.0 0.85</diffuse>
+                  <emissive>0.0 0.75 1.0 1.0</emissive>
+                </material>
+              </visual>
+            </link>
+          </model>
+        </sdf>
+      </breadcrumb>
     </plugin>
   </model>
 </sdf>

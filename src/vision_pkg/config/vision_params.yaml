@@ -1,0 +1,52 @@
+vision_node:
+  ros__parameters:
+    # 集群规模与编队命名（优先使用非空 drone_names；否则若 num_drones > 0 生成 drone_1..drone_N；否则回退至 drone_ids）
+    drone_ids: ["drone_1", "drone_2", "drone_3"]
+    drone_names: [""]
+    num_drones: 6
+
+    # 并行计算与吞吐调度（6–10 路相机 @ >=15 Hz）
+    process_mode: "threaded_batch"
+    max_workers: 0
+    cv2_num_threads: 1
+    per_stream_hz: 15.0
+    target_publish_hz: 20.0
+    process_every_n_frames: 1
+
+    # 输入话题双模兼容（SITL /camera + /state 与兼容别名 /down_cam + /pose）
+    subscribe_compat_aliases: true
+    allow_default_camera_info: true
+    default_hfov_rad: 1.35
+
+    # 多特征谱系目标检测 (F4)
+    detector_type: "color"
+    enable_multi_signature: true
+    detector_profiles_json: ""
+    min_area: 24
+    enable_glare_suppression: true
+    ground_z: 5.5
+
+    # 相机安装外参（默认对齐 x500_down_cam 前斜 35° 下视导航相机，全局 ENU / 机体 FLU）
+    camera_mount_rpy: [0.95993109, 0.0, -1.57079633]
+    camera_offset_body: [0.12, 0.0, -0.04]
+
+    # 多目标全配对极线三角测量与 3D 障碍物 LoS 门控 (F5)
+    enable_multi_target: true
+    enable_triangulation: true
+    triangulation_sync_sec: 0.18
+    min_parallax_deg: 8.0
+    max_skew_rms_m: 0.55
+    min_baseline_m: 3.4
+    min_depth_m: 0.4
+    max_depth_m: 180.0
+    target_z_min: 1.5
+    target_z_max: 35.0
+    cluster_radius_m: 1.5
+    min_cluster_views: 2
+    allow_monocular_fallback: true
+    stereo_lock_sec: 0.85
+    monocular_min_down_cos: 0.36
+    obstacles_yaml_path: ""
+    obstacles_json: ""
+    enable_los_check: true
+    los_clearance_margin_m: 0.0

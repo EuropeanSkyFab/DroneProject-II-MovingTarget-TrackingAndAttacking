@@ -12,20 +12,22 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Central tactical state machine, safety geofence, and 3D deconfliction node."""
+"""Central tactical state machine, 3D CBF safety shield, and velocity feedforward node."""
 
 import copy
 import json
 import math
+import os
 import time
 
 from diagnostic_msgs.msg import DiagnosticStatus, KeyValue
-from geometry_msgs.msg import PoseStamped, Vector3
+from geometry_msgs.msg import PoseStamped, TwistStamped, Vector3
 from nav_msgs.msg import Odometry
 import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import BatteryState
 from std_msgs.msg import Empty, String
+import yaml
 
 VALID_ACTIONS = {
     'TAKEOFF',
@@ -38,29 +40,188 @@ VALID_ACTIONS = {
 }
 
 
+def _discover_default_obstacles_yaml():
+    """Locate default obstacles.yaml from flight_ctrl_pkg share or source tree."""
+    try:
+        from ament_index_python.packages import get_package_share_directory
+        cand = os.path.join(
+            get_package_share_directory('flight_ctrl_pkg'), 'config', 'obstacles.yaml'
+        )
+        if os.path.isfile(cand):
+            return cand
+    except Exception:
+        pass
+    rel_cand = os.path.abspath(
+        os.path.join(
+            os.path.dirname(__file__),
+            '..',
+            '..',
+            'flight_ctrl_pkg',
+            'config',
+            'obstacles.yaml',
+        )
+    )
+    if os.path.isfile(rel_cand):
+        return rel_cand
+    ws_cand = '/home/hkw/flying/ros2_ws/src/flight_ctrl_pkg/config/obstacles.yaml'
+    if os.path.isfile(ws_cand):
+        return ws_cand
+    return ''
+
+
+def _load_arena_config(yaml_path):
+    """Load arena_bounds, helipads, obstacles, and no_fly_zones from YAML."""
+    path = yaml_path if (yaml_path and os.path.isfile(yaml_path)) else (
+        _discover_default_obstacles_yaml()
+    )
+    if not path or not os.path.isfile(path):
+        return {'arena_bounds': {}, 'helipads': [], 'obstacles': [], 'no_fly_zones': []}
+    try:
+        with open(path, 'r', encoding='utf-8') as f:
+            raw = yaml.safe_load(f) or {}
+        if not isinstance(raw, dict):
+            return {'arena_bounds': {}, 'helipads': [], 'obstacles': [], 'no_fly_zones': []}
+        return {
+            'arena_bounds': raw.get('arena_bounds') or {},
+            'helipads': raw.get('helipads') or [],
+            'obstacles': raw.get('obstacles') or [],
+            'no_fly_zones': raw.get('no_fly_zones') or [],
+        }
+    except Exception:
+        return {'arena_bounds': {}, 'helipads': [], 'obstacles': [], 'no_fly_zones': []}
+
+
+def _volume_clearance_and_push(px, py, pz, vol, is_nfz=False, extra_buf=0.0):
+    """Compute signed 3D clearance to an obstacle/NFZ and outward unit push vector."""
+    vtype = 'cylinder' if is_nfz else str(vol.get('type', 'box')).lower()
+    cx = float(vol.get('cx', 0.0))
+    cy = float(vol.get('cy', 0.0))
+    z_min = float(vol.get('z_min', 0.0))
+    z_max = float(vol.get('z_max', 20.0))
+    margin = 0.0 if is_nfz else float(vol.get('safety_margin_m', 0.0))
+    z_top = z_max + margin
+
+    if vtype == 'cylinder':
+        r_eff = float(vol.get('radius', 1.0)) + margin
+        dx = px - cx
+        dy = py - cy
+        d_xy = math.hypot(dx, dy)
+        d_rad = d_xy - r_eff
+        if d_xy > 1e-4:
+            ux, uy = dx / d_xy, dy / d_xy
+        else:
+            ux, uy = -1.0, 0.0
+        if pz < z_min:
+            clr = math.hypot(max(d_rad, 0.0), z_min - pz)
+        elif pz > z_top:
+            clr = (pz - z_top) if d_rad <= 0.0 else math.hypot(d_rad, pz - z_top)
+        else:
+            clr = d_rad
+
+        need_r = r_eff + extra_buf
+        if pz <= z_top + extra_buf and d_xy < need_r:
+            return clr, (cx + ux * need_r, cy + uy * need_r, pz)
+        return clr, None
+
+    sx = float(vol.get('sx', 2.0))
+    sy = float(vol.get('sy', 2.0))
+    yaw = float(vol.get('yaw', 0.0))
+    hx = 0.5 * sx + margin
+    hy = 0.5 * sy + margin
+    c_y = math.cos(-yaw)
+    s_y = math.sin(-yaw)
+    rx = px - cx
+    ry = py - cy
+    lx = c_y * rx - s_y * ry
+    ly = s_y * rx + c_y * ry
+    dx = abs(lx) - hx
+    dy = abs(ly) - hy
+    outside_xy = math.hypot(max(dx, 0.0), max(dy, 0.0))
+    inside_xy = min(max(dx, dy), 0.0)
+    d_xy_box = outside_xy + inside_xy
+
+    if pz < z_min:
+        clr = (z_min - pz) if d_xy_box <= 0.0 else math.hypot(d_xy_box, z_min - pz)
+    elif pz > z_top:
+        clr = (pz - z_top) if d_xy_box <= 0.0 else math.hypot(d_xy_box, pz - z_top)
+    else:
+        if d_xy_box <= 0.0:
+            clr = max(d_xy_box, z_min - pz, pz - z_top)
+        else:
+            clr = d_xy_box
+
+    hx_b = hx + extra_buf
+    hy_b = hy + extra_buf
+    if pz <= z_top + extra_buf and abs(lx) < hx_b and abs(ly) < hy_b:
+        pen_x = hx_b - abs(lx)
+        pen_y = hy_b - abs(ly)
+        pen_z = (z_top + extra_buf) - pz if (not is_nfz and pz > z_top - 1.8) else 1e9
+        if pen_z < min(pen_x, pen_y):
+            return clr, (px, py, z_top + extra_buf)
+        if pen_x <= pen_y:
+            lx_new = hx_b if lx >= 0.0 else -hx_b
+            ly_new = ly
+        else:
+            lx_new = lx
+            ly_new = hy_b if ly >= 0.0 else -hy_b
+        c_w = math.cos(yaw)
+        s_w = math.sin(yaw)
+        wx = cx + c_w * lx_new - s_w * ly_new
+        wy = cy + s_w * lx_new + c_w * ly_new
+        return clr, (wx, wy, pz)
+
+    return clr, None
+
+
+def _point_min_clearance(px, py, pz, arena_cfg):
+    """Compute minimum signed 3D clearance to all obstacles and NFZs."""
+    min_c = 999.0
+    for obs in arena_cfg.get('obstacles', []):
+        c, _ = _volume_clearance_and_push(px, py, pz, obs, is_nfz=False, extra_buf=0.0)
+        if c < min_c:
+            min_c = c
+    for nfz in arena_cfg.get('no_fly_zones', []):
+        c, _ = _volume_clearance_and_push(px, py, pz, nfz, is_nfz=True, extra_buf=0.0)
+        if c < min_c:
+            min_c = c
+    return min_c
+
+
 class CenterNode(Node):
-    """Multi-UAV tactical scheduler, anti-corruption gate, and 3D collision avoidance node."""
+    """Multi-UAV tactical scheduler, anti-corruption gate, and 3D CBF safety node."""
 
     def __init__(self):
-        """Initialize subscriptions, publishers, safety thresholds, and 20Hz control timer."""
+        """Initialize subscriptions, publishers, 3D CBF shield, and 20Hz control timer."""
         super().__init__('center_node')
 
         self.declare_parameter('swarm_ids', ['drone_1', 'drone_2', 'drone_3'])
+        self.declare_parameter('obstacles_yaml_path', '')
         self.declare_parameter('takeoff_alt', 9.5)
         self.declare_parameter('track_safe_dist', 5.0)
         self.declare_parameter('home_spacing_y', 3.0)
         self.declare_parameter('max_vision_delay', 0.5)
         self.declare_parameter('max_plan_delay', 0.8)
+        self.declare_parameter('cbf_safe_dist', 2.2)
 
         self.swarm_config = [str(d) for d in self.get_parameter('swarm_ids').value]
+        self.obstacles_yaml_path = str(self.get_parameter('obstacles_yaml_path').value).strip()
+        self.arena_cfg = _load_arena_config(self.obstacles_yaml_path)
         self.takeoff_alt = float(self.get_parameter('takeoff_alt').value)
         self.TRACK_SAFE_DIST = float(self.get_parameter('track_safe_dist').value)
         self.home_spacing_y = float(self.get_parameter('home_spacing_y').value)
         self.max_vision_delay = float(self.get_parameter('max_vision_delay').value)
         self.max_plan_delay = float(self.get_parameter('max_plan_delay').value)
+        self.cbf_safe_dist = max(1.6, float(self.get_parameter('cbf_safe_dist').value))
+
+        self.helipads = {}
+        for pad in self.arena_cfg.get('helipads', []):
+            d_id = str(pad.get('drone_id', '')).strip()
+            if d_id:
+                self.helipads[d_id] = (float(pad.get('x', 0.0)), float(pad.get('y', 0.0)))
 
         self.heartbeat_pubs = {}
         self.fmu_pubs = {}
+        self.ff_pubs = {}
         self.gimbal_pubs = {}
         self.action_pubs = {}
         self.battery_pubs = {}
@@ -74,6 +235,7 @@ class CenterNode(Node):
         self.takeoff_anchors = {}
 
         self.latest_plan_targets = {d_id: None for d_id in self.swarm_config}
+        self.latest_plan_vels = {d_id: (0.0, 0.0, 0.0) for d_id in self.swarm_config}
         self.latest_plan_focus = {d_id: None for d_id in self.swarm_config}
         self.last_plan_times = {d_id: 0.0 for d_id in self.swarm_config}
 
@@ -82,6 +244,7 @@ class CenterNode(Node):
         self.latest_vision_target = None
         self.last_battery_pub_time = 0.0
         self.last_fleet_pub_time = 0.0
+        self.last_cbf_active_count = 0
 
         self.MAX_XY_DIST = 1000.0
         self.MAX_ALT = 50.0
@@ -127,6 +290,9 @@ class CenterNode(Node):
             self.fmu_pubs[drone_id] = self.create_publisher(
                 PoseStamped, f'/{drone_id}/fmu/in/trajectory_setpoint', 10
             )
+            self.ff_pubs[drone_id] = self.create_publisher(
+                TwistStamped, f'/{drone_id}/fmu/in/trajectory_ff', 10
+            )
             self.gimbal_pubs[drone_id] = self.create_publisher(
                 Vector3, f'/{drone_id}/fmu/in/gimbal_setpoint', 10
             )
@@ -144,7 +310,57 @@ class CenterNode(Node):
             )
 
         self.timer = self.create_timer(0.05, self.timer_callback)
-        self.get_logger().info(f'中枢节点已启动(20Hz): 集群={self.swarm_config}')
+        self.get_logger().info(
+            f'中枢节点已启动(20Hz): 集群={self.swarm_config}, '
+            f'障碍物={len(self.arena_cfg.get("obstacles", []))}'
+        )
+
+    def _get_home_xy(self, drone_id):
+        """Return helipad home (x, y) for drone_id."""
+        if drone_id in self.helipads:
+            return self.helipads[drone_id]
+        idx = self.swarm_config.index(drone_id) if drone_id in self.swarm_config else 0
+        return (0.0, idx * self.home_spacing_y)
+
+    def _project_outside_obstacles(self, px, py, pz, cur_x, cur_y, cur_z, buf=0.65):
+        """Project candidate setpoint (px, py, pz) outside all 3D obstacles and NFZs."""
+        x, y, z = float(px), float(py), float(pz)
+        modified = False
+        all_vols = [
+            (obs, False) for obs in self.arena_cfg.get('obstacles', [])
+        ] + [
+            (nfz, True) for nfz in self.arena_cfg.get('no_fly_zones', [])
+        ]
+        if not all_vols:
+            return x, y, z, False
+
+        # Check dense ray samples from current pos to target so obstacles ahead are not skipped
+        for alpha in (0.15, 0.32, 0.50, 0.72, 1.0):
+            sx = cur_x + alpha * (x - cur_x)
+            sy = cur_y + alpha * (y - cur_y)
+            sz = cur_z + alpha * (z - cur_z)
+            for vol, is_nfz in all_vols:
+                _, pushed = _volume_clearance_and_push(
+                    sx, sy, sz, vol, is_nfz=is_nfz, extra_buf=max(buf, 0.95)
+                )
+                if pushed is not None:
+                    modified = True
+                    # Deflect target toward the pushed safe boundary point
+                    x, y, z = pushed[0], pushed[1], max(z, pushed[2])
+
+        for _ in range(3):
+            any_push = False
+            for vol, is_nfz in all_vols:
+                _, pushed = _volume_clearance_and_push(
+                    x, y, z, vol, is_nfz=is_nfz, extra_buf=max(buf, 0.95)
+                )
+                if pushed is not None:
+                    x, y, z = pushed
+                    modified = True
+                    any_push = True
+            if not any_push:
+                break
+        return x, y, z, modified
 
     def send_single_target(self, drone_id, target_msg):
         """Clamp target setpoint within electronic geofence and publish to bridge."""
@@ -173,7 +389,7 @@ class CenterNode(Node):
         if mode == 'ATTACK':
             if out_msg.pose.position.z < self.ATTACK_MIN_ALT:
                 out_msg.pose.position.z = self.ATTACK_MIN_ALT
-        elif mode not in ('TAKEOFF', 'RETURN'):
+        elif mode not in ('TAKEOFF', 'RETURN', 'GROUND'):
             if out_msg.pose.position.z < self.MIN_ALT:
                 out_msg.pose.position.z = self.MIN_ALT + 0.1
                 self.get_logger().warn(
@@ -182,6 +398,18 @@ class CenterNode(Node):
                 )
 
         self.fmu_pubs[drone_id].publish(out_msg)
+
+    def publish_velocity_ff(self, drone_id, vx, vy, vz):
+        """Publish 3D velocity feedforward TwistStamped in world ENU frame."""
+        if drone_id not in self.ff_pubs:
+            return
+        msg = TwistStamped()
+        msg.header.stamp = self.get_clock().now().to_msg()
+        msg.header.frame_id = 'world'
+        msg.twist.linear.x = float(vx) if math.isfinite(float(vx)) else 0.0
+        msg.twist.linear.y = float(vy) if math.isfinite(float(vy)) else 0.0
+        msg.twist.linear.z = float(vz) if math.isfinite(float(vz)) else 0.0
+        self.ff_pubs[drone_id].publish(msg)
 
     def publish_gimbal_target(self, drone_id, target_msg, my_state):
         """Compute 3D pitch and NED yaw pointing angles and publish gimbal setpoint."""
@@ -220,8 +448,12 @@ class CenterNode(Node):
         self.fc_diags[drone_id] = {kv.key: kv.value for kv in msg.values}
 
     def apply_collision_avoidance(self, drone_id, my_state, target, my_mode):
-        """Apply dynamic-priority 3D tangential/vertical collision avoidance."""
+        """Apply 3D CBF inter-UAV separation, symmetry breaking, and obstacle shield."""
         my_index = self.swarm_config.index(drone_id)
+        cur_x = float(my_state.pose.pose.position.x)
+        cur_y = float(my_state.pose.pose.position.y)
+        cur_z = float(my_state.pose.pose.position.z)
+        cbf_triggered = False
 
         for other_id in self.swarm_config:
             if other_id == drone_id:
@@ -232,56 +464,164 @@ class CenterNode(Node):
             if other_state is None or other_mode == 'GROUND':
                 continue
 
-            odx = float(my_state.pose.pose.position.x - other_state.pose.pose.position.x)
-            ody = float(my_state.pose.pose.position.y - other_state.pose.pose.position.y)
-            odz = float(my_state.pose.pose.position.z - other_state.pose.pose.position.z)
+            other_idx = self.swarm_config.index(other_id)
+            ox = float(other_state.pose.pose.position.x)
+            oy = float(other_state.pose.pose.position.y)
+            oz = float(other_state.pose.pose.position.z)
+            odx = cur_x - ox
+            ody = cur_y - oy
+            odz = cur_z - oz
             dist = math.sqrt(odx * odx + ody * ody + odz * odz)
 
-            if not (0.01 < dist < self.COLLISION_WARN_DIST):
+            if not (0.001 < dist < self.COLLISION_WARN_DIST):
                 continue
 
             if my_mode in ('TAKEOFF', 'RETURN') and dist >= 2.2:
                 continue
 
-            if my_mode == 'ATTACK' and other_mode != 'ATTACK':
-                is_higher_priority = True
-            elif my_mode != 'ATTACK' and other_mode == 'ATTACK':
-                is_higher_priority = False
+            cbf_triggered = True
+            horiz = math.hypot(odx, ody)
+            if horiz > 1e-4:
+                ux, uy = odx / horiz, ody / horiz
             else:
-                is_higher_priority = my_index < self.swarm_config.index(other_id)
+                ang = (2.0 * math.pi * my_index) / max(len(self.swarm_config), 1)
+                ux, uy = math.cos(ang), math.sin(ang)
 
-            if is_higher_priority:
-                if dist < 3.6:
-                    horiz = max(math.hypot(odx, ody), 1e-4)
-                    target.pose.position.x += (odx / horiz) * 2.4
-                    target.pose.position.y += (ody / horiz) * 2.4
-                continue
-
-            other_vz = float(other_state.twist.twist.linear.z)
-            horiz = max(math.hypot(odx, ody), 1e-4)
-            ux, uy = odx / horiz, ody / horiz
-            if abs(other_vz) < 0.5 and abs(odz) < 2.2:
-                target.pose.position.z = min(float(target.pose.position.z) + 2.4, 25.0)
-                if dist >= 4.2:
-                    self.get_logger().warn(
-                        f'[{drone_id}] 友机平飞接近({dist:.1f}m)，执行战术拉升避让',
-                        throttle_duration_sec=1.5,
-                    )
-                    continue
+            # Right-hand lateral normal breaks exact collinear head-on symmetry
+            lat_x, lat_y = -uy, ux
 
             if dist < self.COLLISION_DANGER_DIST:
-                push = 5.6
-                target.pose.position.x += ux * push
-                target.pose.position.y += uy * push
-                self.get_logger().warn(
-                    f'[{drone_id}] 进入危险间距({dist:.1f}m)，紧急排斥分离',
-                    throttle_duration_sec=1.0,
+                push = max(2.2, (self.COLLISION_DANGER_DIST - dist) * 2.2)
+                lat_push = max(1.4, (self.COLLISION_DANGER_DIST - dist) * 1.5)
+                z_sign = 1.0 if my_index < other_idx else -1.0
+                target.pose.position.x = cur_x + ux * push + lat_x * lat_push
+                target.pose.position.y = cur_y + uy * push + lat_y * lat_push
+                target.pose.position.z = max(
+                    self.MIN_ALT + 0.2,
+                    min(self.MAX_ALT, cur_z + z_sign * 0.8),
                 )
             else:
-                tangent_x, tangent_y = -uy, ux
                 push = (self.COLLISION_WARN_DIST - dist) * 1.15
-                target.pose.position.x += (0.65 * ux + 0.75 * tangent_x) * push
-                target.pose.position.y += (0.65 * uy + 0.75 * tangent_y) * push
+                target.pose.position.x += (0.65 * ux + 0.75 * lat_x) * push
+                target.pose.position.y += (0.65 * uy + 0.75 * lat_y) * push
+                if abs(odz) < 2.0 and my_index > other_idx:
+                    target.pose.position.z = min(
+                        float(target.pose.position.z) + 1.6, 25.0
+                    )
+
+        px, py, pz, obs_mod = self._project_outside_obstacles(
+            target.pose.position.x,
+            target.pose.position.y,
+            target.pose.position.z,
+            cur_x,
+            cur_y,
+            cur_z,
+            buf=0.65,
+        )
+        if obs_mod:
+            target.pose.position.x = px
+            target.pose.position.y = py
+            target.pose.position.z = pz
+            cbf_triggered = True
+
+        return cbf_triggered
+
+    def _joint_cbf_deconflict_setpoints(self, pending_targets, cbf_flags):
+        """Enforce pairwise 3D setpoint separation and obstacle clearance across all UAVs."""
+        active_ids = list(pending_targets.keys())
+        if not active_ids:
+            return
+
+        min_sp_dist = self.cbf_safe_dist
+        n_act = len(active_ids)
+        for _ in range(6):
+            for i in range(n_act):
+                id_a = active_ids[i]
+                pa = pending_targets[id_a].pose.position
+                st_a = self.drone_states.get(id_a)
+                for j in range(i + 1, n_act):
+                    id_b = active_ids[j]
+                    pb = pending_targets[id_b].pose.position
+                    st_b = self.drone_states.get(id_b)
+
+                    dx = float(pa.x - pb.x)
+                    dy = float(pa.y - pb.y)
+                    dz = float(pa.z - pb.z)
+                    dist = math.sqrt(dx * dx + dy * dy + dz * dz)
+                    if dist < min_sp_dist:
+                        cbf_flags[id_a] = True
+                        cbf_flags[id_b] = True
+                        if dist > 1e-3:
+                            ux, uy, uz = dx / dist, dy / dist, dz / dist
+                        elif st_a is not None and st_b is not None:
+                            sdx = float(
+                                st_a.pose.pose.position.x - st_b.pose.pose.position.x
+                            )
+                            sdy = float(
+                                st_a.pose.pose.position.y - st_b.pose.pose.position.y
+                            )
+                            sdz = float(
+                                st_a.pose.pose.position.z - st_b.pose.pose.position.z
+                            )
+                            sdist = math.sqrt(sdx * sdx + sdy * sdy + sdz * sdz)
+                            if sdist > 1e-3:
+                                ux, uy, uz = sdx / sdist, sdy / sdist, sdz / sdist
+                            else:
+                                ang = (2.0 * math.pi * i) / max(n_act, 1)
+                                ux, uy, uz = math.cos(ang), math.sin(ang), 0.0
+                        else:
+                            ang = (2.0 * math.pi * i) / max(n_act, 1)
+                            ux, uy, uz = math.cos(ang), math.sin(ang), 0.0
+
+                        corr = 0.52 * (min_sp_dist - dist)
+                        pa.x = float(pa.x + ux * corr)
+                        pa.y = float(pa.y + uy * corr)
+                        pa.z = float(pa.z + uz * corr * 0.4)
+                        pb.x = float(pb.x - ux * corr)
+                        pb.y = float(pb.y - uy * corr)
+                        pb.z = float(pb.z - uz * corr * 0.4)
+
+                    # Also prevent setpoint A from sitting on top of drone B's current pose
+                    if st_b is not None:
+                        bx = float(st_b.pose.pose.position.x)
+                        by = float(st_b.pose.pose.position.y)
+                        bz = float(st_b.pose.pose.position.z)
+                        adx = float(pa.x - bx)
+                        ady = float(pa.y - by)
+                        adz = float(pa.z - bz)
+                        adist = math.sqrt(adx * adx + ady * ady + adz * adz)
+                        if 1e-4 < adist < min_sp_dist:
+                            cbf_flags[id_a] = True
+                            push = min_sp_dist - adist
+                            pa.x = float(pa.x + (adx / adist) * push)
+                            pa.y = float(pa.y + (ady / adist) * push)
+
+                    if st_a is not None:
+                        ax = float(st_a.pose.pose.position.x)
+                        ay = float(st_a.pose.pose.position.y)
+                        az = float(st_a.pose.pose.position.z)
+                        bdx = float(pb.x - ax)
+                        bdy = float(pb.y - ay)
+                        bdz = float(pb.z - az)
+                        bdist = math.sqrt(bdx * bdx + bdy * bdy + bdz * bdz)
+                        if 1e-4 < bdist < min_sp_dist:
+                            cbf_flags[id_b] = True
+                            push = min_sp_dist - bdist
+                            pb.x = float(pb.x + (bdx / bdist) * push)
+                            pb.y = float(pb.y + (bdy / bdist) * push)
+
+            for d_id in active_ids:
+                p = pending_targets[d_id].pose.position
+                st = self.drone_states.get(d_id)
+                cx = float(st.pose.pose.position.x) if st is not None else float(p.x)
+                cy = float(st.pose.pose.position.y) if st is not None else float(p.y)
+                cz = float(st.pose.pose.position.z) if st is not None else float(p.z)
+                nx, ny, nz, mod = self._project_outside_obstacles(
+                    p.x, p.y, p.z, cx, cy, cz, buf=0.65
+                )
+                if mod:
+                    p.x, p.y, p.z = nx, ny, nz
+                    cbf_flags[d_id] = True
 
     def _is_valid_xyz(self, x, y, z, min_z):
         if math.isnan(x) or math.isnan(y) or math.isnan(z):
@@ -295,7 +635,7 @@ class CenterNode(Node):
         return True
 
     def plan_callback(self, msg):
-        """Validate and store per-drone trajectory target from planning_pkg."""
+        """Validate and store per-drone trajectory target and velocity from planning_pkg."""
         try:
             data = json.loads(msg.data)
             drone_id = str(data.get('drone_id', 'drone_1'))
@@ -311,11 +651,21 @@ class CenterNode(Node):
             y = float(data.get('y', 0.0))
             z = float(data.get('z', 0.0))
             act = str(data.get('action', 'TRACK')).upper()
-            min_z = self.ATTACK_MIN_ALT if act == 'ATTACK' else self.MIN_ALT
+            min_z = 0.0 if act == 'RETURN' else (
+                self.ATTACK_MIN_ALT if act == 'ATTACK' else self.MIN_ALT
+            )
 
             if not self._is_valid_xyz(x, y, z, min_z):
-                self.get_logger().warn('规划数据越界或含非法浮点数，已拦截', throttle_duration_sec=1.5)
+                self.get_logger().warn(
+                    '规划数据越界或含非法浮点数，已拦截', throttle_duration_sec=1.5
+                )
                 return
+
+            vx = float(data.get('vx', 0.0))
+            vy = float(data.get('vy', 0.0))
+            vz = float(data.get('vz', 0.0))
+            if not (math.isfinite(vx) and math.isfinite(vy) and math.isfinite(vz)):
+                vx, vy, vz = 0.0, 0.0, 0.0
 
             target = PoseStamped()
             target.header.stamp = self.get_clock().now().to_msg()
@@ -326,14 +676,21 @@ class CenterNode(Node):
             target.pose.orientation.w = 1.0
 
             self.latest_plan_targets[drone_id] = target
+            self.latest_plan_vels[drone_id] = (vx, vy, vz)
             if 'focus_x' in data and 'focus_y' in data and 'focus_z' in data:
-                focus = PoseStamped()
-                focus.header = target.header
-                focus.pose.position.x = float(data['focus_x'])
-                focus.pose.position.y = float(data['focus_y'])
-                focus.pose.position.z = float(data['focus_z'])
-                focus.pose.orientation.w = 1.0
-                self.latest_plan_focus[drone_id] = focus
+                fx = float(data['focus_x'])
+                fy = float(data['focus_y'])
+                fz = float(data['focus_z'])
+                if math.isfinite(fx) and math.isfinite(fy) and math.isfinite(fz):
+                    focus = PoseStamped()
+                    focus.header = target.header
+                    focus.pose.position.x = fx
+                    focus.pose.position.y = fy
+                    focus.pose.position.z = fz
+                    focus.pose.orientation.w = 1.0
+                    self.latest_plan_focus[drone_id] = focus
+                else:
+                    self.latest_plan_focus[drone_id] = None
             else:
                 self.latest_plan_focus[drone_id] = None
             self.last_plan_times[drone_id] = time.time()
@@ -368,7 +725,9 @@ class CenterNode(Node):
         """Parse strategic commands (supporting single drone_id or ALL broadcast)."""
         try:
             data = json.loads(msg.data)
-            raw_id = str(data.get('drone_id', 'drone_1')).strip()
+            if not isinstance(data, dict) or 'action' not in data:
+                return
+            raw_id = str(data.get('drone_id', 'ALL')).strip()
             action = str(data.get('action', 'HOVER')).upper().strip()
 
             if action not in VALID_ACTIONS:
@@ -397,8 +756,7 @@ class CenterNode(Node):
                             float(st.pose.pose.position.y),
                         )
                     else:
-                        idx = self.swarm_config.index(d_id)
-                        self.takeoff_anchors[d_id] = (0.0, idx * self.home_spacing_y)
+                        self.takeoff_anchors[d_id] = self._get_home_xy(d_id)
 
                 self.drone_modes[d_id] = action
                 self.current_mode = action
@@ -424,7 +782,7 @@ class CenterNode(Node):
         return target
 
     def timer_callback(self):
-        """Execute 20Hz state machine routing, collision avoidance, and telemetry broadcast."""
+        """Execute 20Hz state machine routing, 3D CBF safety shield, and telemetry."""
         now = time.time()
 
         for drone_id in self.heartbeat_pubs:
@@ -436,7 +794,12 @@ class CenterNode(Node):
         for d_id in self.swarm_config:
             if now - self.last_plan_times[d_id] > 2.0:
                 self.latest_plan_targets[d_id] = None
+                self.latest_plan_vels[d_id] = (0.0, 0.0, 0.0)
                 self.latest_plan_focus[d_id] = None
+
+        pending_targets = {}
+        pending_gimbal = {}
+        cbf_flags = {d_id: False for d_id in self.swarm_config}
 
         for drone_id in self.swarm_config:
             mode = self.drone_modes.get(drone_id, 'GROUND')
@@ -456,8 +819,9 @@ class CenterNode(Node):
                 target.pose.position.x = ax
                 target.pose.position.y = ay
                 target.pose.position.z = self.takeoff_alt + 0.4 * my_idx
-                self.apply_collision_avoidance(drone_id, my_state, target, mode)
-                self.send_single_target(drone_id, target)
+                if self.apply_collision_avoidance(drone_id, my_state, target, mode):
+                    cbf_flags[drone_id] = True
+                pending_targets[drone_id] = target
 
             elif mode == 'HOVER':
                 tx, ty, tz = cur_x, cur_y, max(cur_z, self.MIN_ALT + 0.5)
@@ -471,17 +835,24 @@ class CenterNode(Node):
                         ody = ty - float(other_state.pose.pose.position.y)
                         odz = tz - float(other_state.pose.pose.position.z)
                         dist = math.sqrt(odx * odx + ody * ody + odz * odz)
-                        if 0.01 < dist < 6.0:
+                        if 0.01 < dist < 3.6:
+                            cbf_flags[drone_id] = True
                             horiz = max(math.hypot(odx, ody), 1e-4)
-                            push = (6.0 - dist) * 1.4
+                            push = (3.6 - dist) * 1.2
                             tx += (odx / horiz) * push
                             ty += (ody / horiz) * push
+                px, py, pz, obs_mod = self._project_outside_obstacles(
+                    tx, ty, tz, cur_x, cur_y, cur_z, buf=0.65
+                )
+                if obs_mod:
+                    tx, ty, tz = px, py, pz
+                    cbf_flags[drone_id] = True
                 target = PoseStamped()
                 target.header.frame_id = 'world'
                 target.pose.position.x = tx
                 target.pose.position.y = ty
                 target.pose.position.z = tz
-                self.send_single_target(drone_id, target)
+                pending_targets[drone_id] = target
 
             elif mode == 'RESUME_PATROL':
                 my_plan = self.latest_plan_targets.get(drone_id)
@@ -490,14 +861,14 @@ class CenterNode(Node):
                     if my_plan is not None
                     else self._compute_builtin_patrol(drone_id, now)
                 )
-                self.apply_collision_avoidance(drone_id, my_state, target, mode)
-                self.send_single_target(drone_id, target)
+                if self.apply_collision_avoidance(drone_id, my_state, target, mode):
+                    cbf_flags[drone_id] = True
+                pending_targets[drone_id] = target
                 if self.latest_vision_target is not None:
-                    self.publish_gimbal_target(drone_id, self.latest_vision_target, my_state)
+                    pending_gimbal[drone_id] = (self.latest_vision_target, my_state)
 
             elif mode == 'RETURN':
-                home_x = 0.0
-                home_y = my_idx * self.home_spacing_y
+                home_x, home_y = self._get_home_xy(drone_id)
                 horiz_dist = math.hypot(cur_x - home_x, cur_y - home_y)
                 vx = float(my_state.twist.twist.linear.x)
                 vy = float(my_state.twist.twist.linear.y)
@@ -508,20 +879,28 @@ class CenterNode(Node):
                 target = PoseStamped()
                 target.header.frame_id = 'world'
                 if horiz_dist > 0.32 or (cur_z > 2.0 and horiz_spd > 0.38):
-                    # 分层返航高度走廊 (7.5m / 9.0m / 10.5m) + 停机坪正上方悬停刹停对准后再落
                     ret_alt = (
-                        max(cur_z, 7.5 + 1.5 * my_idx) if horiz_dist > 1.5 else max(cur_z, 4.5)
+                        max(cur_z, 10.5 + 1.4 * my_idx)
+                        if horiz_dist > 2.2
+                        else max(cur_z, 4.5)
                     )
-                    target.pose.position.x = home_x
-                    target.pose.position.y = home_y
-                    target.pose.position.z = min(ret_alt, 20.0)
+                    if horiz_dist > 5.0:
+                        ux = (home_x - cur_x) / horiz_dist
+                        uy = (home_y - cur_y) / horiz_dist
+                        target.pose.position.x = cur_x + ux * 5.0
+                        target.pose.position.y = cur_y + uy * 5.0
+                    else:
+                        target.pose.position.x = home_x
+                        target.pose.position.y = home_y
+                    target.pose.position.z = min(ret_alt, 22.0)
                     if horiz_dist > 1.5:
-                        self.apply_collision_avoidance(drone_id, my_state, target, mode)
+                        if self.apply_collision_avoidance(drone_id, my_state, target, mode):
+                            cbf_flags[drone_id] = True
                 else:
                     target.pose.position.x = home_x
                     target.pose.position.y = home_y
                     target.pose.position.z = 0.0
-                self.send_single_target(drone_id, target)
+                pending_targets[drone_id] = target
 
                 if cur_z < self.LAND_ALT_THRESHOLD and speed < self.LAND_SPEED_THRESHOLD:
                     self.drone_modes[drone_id] = 'GROUND'
@@ -536,14 +915,13 @@ class CenterNode(Node):
                 plan_fresh = (now - self.last_plan_times[drone_id]) <= 1.2
 
                 if my_plan is not None and plan_fresh:
-                    # 优先采用 planning_pkg 输出的 120° 锁相合围与视场高度优化点
                     target = copy.deepcopy(my_plan)
                 elif self.latest_vision_target is not None:
-                    # 无规划器独立运行兜底：围绕视觉目标做分相安全距离环绕 + 俯视高度抬升
                     raw_v = self.latest_vision_target
                     target = copy.deepcopy(raw_v)
                     target.pose.position.z = max(
-                        self.MIN_ALT + 3.0, float(raw_v.pose.position.z) + 3.4 + 0.4 * my_idx
+                        self.MIN_ALT + 3.0,
+                        float(raw_v.pose.position.z) + 3.4 + 0.4 * my_idx,
                     )
                     dx = float(raw_v.pose.position.x) - cur_x
                     dy = float(raw_v.pose.position.y) - cur_y
@@ -551,24 +929,29 @@ class CenterNode(Node):
                     if 0.01 < h_dist < self.TRACK_SAFE_DIST:
                         ux, uy = dx / h_dist, dy / h_dist
                         push = (self.TRACK_SAFE_DIST - h_dist) * 1.5
-                        target.pose.position.x = float(raw_v.pose.position.x) - ux * (
-                            self.TRACK_SAFE_DIST * 0.85
-                        ) - uy * push
-                        target.pose.position.y = float(raw_v.pose.position.y) - uy * (
-                            self.TRACK_SAFE_DIST * 0.85
-                        ) + ux * push
+                        target.pose.position.x = (
+                            float(raw_v.pose.position.x)
+                            - ux * (self.TRACK_SAFE_DIST * 0.85)
+                            - uy * push
+                        )
+                        target.pose.position.y = (
+                            float(raw_v.pose.position.y)
+                            - uy * (self.TRACK_SAFE_DIST * 0.85)
+                            + ux * push
+                        )
                 else:
                     continue
 
-                self.apply_collision_avoidance(drone_id, my_state, target, mode)
-                self.send_single_target(drone_id, target)
+                if self.apply_collision_avoidance(drone_id, my_state, target, mode):
+                    cbf_flags[drone_id] = True
+                pending_targets[drone_id] = target
                 focus_pt = self.latest_plan_focus.get(drone_id)
                 gimbal_ref = (
                     self.latest_vision_target
                     if self.latest_vision_target is not None
                     else (focus_pt if focus_pt is not None else target)
                 )
-                self.publish_gimbal_target(drone_id, gimbal_ref, my_state)
+                pending_gimbal[drone_id] = (gimbal_ref, my_state)
 
             elif mode in ('INTERCEPT', 'ATTACK'):
                 my_plan = self.latest_plan_targets.get(drone_id)
@@ -582,21 +965,61 @@ class CenterNode(Node):
                 else:
                     continue
 
-                self.apply_collision_avoidance(drone_id, my_state, target, mode)
-                self.send_single_target(drone_id, target)
+                if self.apply_collision_avoidance(drone_id, my_state, target, mode):
+                    cbf_flags[drone_id] = True
+                pending_targets[drone_id] = target
                 focus_pt = self.latest_plan_focus.get(drone_id)
                 gimbal_ref = (
                     self.latest_vision_target
                     if self.latest_vision_target is not None
                     else (focus_pt if focus_pt is not None else target)
                 )
-                self.publish_gimbal_target(drone_id, gimbal_ref, my_state)
+                pending_gimbal[drone_id] = (gimbal_ref, my_state)
+
+        self._joint_cbf_deconflict_setpoints(pending_targets, cbf_flags)
+        self.last_cbf_active_count = sum(1 for v in cbf_flags.values() if v)
+
+        for drone_id, target in pending_targets.items():
+            self.send_single_target(drone_id, target)
+            mode = self.drone_modes.get(drone_id, 'GROUND')
+            my_state = self.drone_states.get(drone_id)
+            if mode == 'HOVER':
+                self.publish_velocity_ff(drone_id, 0.0, 0.0, 0.0)
+            elif my_state is not None:
+                pvx, pvy, pvz = self.latest_plan_vels.get(drone_id, (0.0, 0.0, 0.0))
+                plan_fresh = (now - self.last_plan_times[drone_id]) <= 1.2
+                dx = float(target.pose.position.x - my_state.pose.pose.position.x)
+                dy = float(target.pose.position.y - my_state.pose.pose.position.y)
+                dz = float(target.pose.position.z - my_state.pose.pose.position.z)
+                if plan_fresh and not cbf_flags.get(drone_id, False) and (
+                    math.hypot(pvx, pvy) > 0.05 or abs(pvz) > 0.05
+                ):
+                    vx_cmd = pvx + 0.8 * dx
+                    vy_cmd = pvy + 0.8 * dy
+                    vz_cmd = pvz + 0.8 * dz
+                else:
+                    gain = 2.2 if mode == 'ATTACK' else (1.6 if mode == 'INTERCEPT' else 1.2)
+                    vx_cmd = gain * dx + (0.35 * pvx if plan_fresh else 0.0)
+                    vy_cmd = gain * dy + (0.35 * pvy if plan_fresh else 0.0)
+                    vz_cmd = 1.2 * dz + (0.35 * pvz if plan_fresh else 0.0)
+                h_spd = math.hypot(vx_cmd, vy_cmd)
+                v_cap = 13.5 if mode == 'ATTACK' else (10.5 if mode == 'INTERCEPT' else 6.5)
+                if h_spd > v_cap:
+                    vx_cmd *= v_cap / h_spd
+                    vy_cmd *= v_cap / h_spd
+                vz_cmd = max(-4.0, min(4.0, vz_cmd))
+                self.publish_velocity_ff(drone_id, vx_cmd, vy_cmd, vz_cmd)
+
+        for drone_id, (gimbal_ref, my_state) in pending_gimbal.items():
+            self.publish_gimbal_target(drone_id, gimbal_ref, my_state)
 
         self._publish_telemetry(now)
 
     def _publish_telemetry(self, now):
         """Publish link health, real 6S battery state, and aggregated /fleet/state."""
         fleet_snapshot = {'stamp': round(now, 3), 'drones': {}}
+        active_positions = []
+        min_obs_clr = 999.0
 
         for drone_id in self.swarm_config:
             my_state = self.drone_states.get(drone_id)
@@ -606,7 +1029,12 @@ class CenterNode(Node):
 
             delay = max(0.0, now - last_t)
             pos = my_state.pose.pose.position
-            dist_home = math.hypot(float(pos.x), float(pos.y))
+            px, py, pz = float(pos.x), float(pos.y), float(pos.z)
+            active_positions.append((px, py, pz))
+            clr = _point_min_clearance(px, py, pz, self.arena_cfg)
+            if clr < min_obs_clr:
+                min_obs_clr = clr
+            dist_home = math.hypot(px, py)
 
             status = DiagnosticStatus()
             status.hardware_id = drone_id
@@ -640,12 +1068,23 @@ class CenterNode(Node):
             batt_v = float(raw_batt.voltage) if raw_batt is not None else 25.2
             fleet_snapshot['drones'][drone_id] = {
                 'mode': self.drone_modes.get(drone_id, 'GROUND'),
-                'pos': [round(float(pos.x), 2), round(float(pos.y), 2), round(float(pos.z), 2)],
+                'pos': [round(px, 2), round(py, 2), round(pz, 2)],
                 'battery_pct': round(batt_pct, 3),
                 'voltage_v': round(batt_v, 2),
                 'delay_ms': round(delay * 1000.0, 1),
                 'rssi': rssi_dbm,
             }
+
+        min_inter_dist = 999.0
+        for i in range(len(active_positions)):
+            for j in range(i + 1, len(active_positions)):
+                d_ij = math.dist(active_positions[i], active_positions[j])
+                if d_ij < min_inter_dist:
+                    min_inter_dist = d_ij
+
+        fleet_snapshot['min_inter_drone_dist_m'] = round(min_inter_dist, 4)
+        fleet_snapshot['min_obstacle_clearance_m'] = round(min_obs_clr, 4)
+        fleet_snapshot['cbf_active_count'] = int(self.last_cbf_active_count)
 
         if now - self.last_fleet_pub_time >= 0.2 and fleet_snapshot['drones']:
             self.last_fleet_pub_time = now

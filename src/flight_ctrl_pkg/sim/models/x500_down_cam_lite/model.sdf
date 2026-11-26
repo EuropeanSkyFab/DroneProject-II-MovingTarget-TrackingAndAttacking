@@ -1,0 +1,85 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<sdf version="1.9">
+  <model name="x500_down_cam_lite">
+    <include merge="true">
+      <uri>x500</uri>
+    </include>
+
+    <!-- 1. 前斜下视 35° 轻量化定焦导航检测相机（480x360 @ 15Hz，严格对齐 vision_pkg 外参） -->
+    <link name="down_cam_link">
+      <pose relative_to="base_link">0.12 0.0 -0.04 0.0 0.61086524 0.0</pose>
+      <inertial>
+        <mass>0.015</mass>
+        <inertia>
+          <ixx>0.00001</ixx><ixy>0</ixy><ixz>0</ixz>
+          <iyy>0.00001</iyy><iyz>0</iyz>
+          <izz>0.00001</izz>
+        </inertia>
+      </inertial>
+      <visual name="cam_visual">
+        <geometry><box><size>0.036 0.048 0.032</size></box></geometry>
+        <material>
+          <ambient>0.12 0.14 0.18 1</ambient>
+          <diffuse>0.22 0.25 0.30 1</diffuse>
+        </material>
+      </visual>
+      <sensor name="down_cam" type="camera">
+        <pose>0 0 0 0 0 0</pose>
+        <camera>
+          <horizontal_fov>1.35</horizontal_fov>
+          <image>
+            <width>480</width>
+            <height>360</height>
+            <format>R8G8B8</format>
+          </image>
+          <clip>
+            <near>0.1</near>
+            <far>1200</far>
+          </clip>
+        </camera>
+        <always_on>1</always_on>
+        <update_rate>15</update_rate>
+        <visualize>false</visualize>
+      </sensor>
+    </link>
+    <joint name="DownCamJoint" type="fixed">
+      <parent>base_link</parent>
+      <child>down_cam_link</child>
+      <pose relative_to="base_link">0 0 0 0 0 0</pose>
+    </joint>
+
+    <!-- 2. Interceptor Cyan Navigation Strobes (non-red/amber, HSV-safe) -->
+    <link name="nav_strobes_link">
+      <pose relative_to="base_link">0 0 0 0 0 0</pose>
+      <inertial>
+        <mass>0.001</mass>
+        <inertia><ixx>1e-6</ixx><iyy>1e-6</iyy><izz>1e-6</izz></inertia>
+      </inertial>
+      <visual name="strobe_fl">
+        <pose>0.174 0.174 0.012 0 0 0</pose>
+        <geometry><sphere><radius>0.014</radius></sphere></geometry>
+        <material><ambient>0.04 0.55 0.90 1</ambient><diffuse>0.04 0.65 0.95 1</diffuse><emissive>0.05 0.72 1.0 1</emissive></material>
+      </visual>
+      <visual name="strobe_fr">
+        <pose>0.174 -0.174 0.012 0 0 0</pose>
+        <geometry><sphere><radius>0.014</radius></sphere></geometry>
+        <material><ambient>0.04 0.55 0.90 1</ambient><diffuse>0.04 0.65 0.95 1</diffuse><emissive>0.05 0.72 1.0 1</emissive></material>
+      </visual>
+      <visual name="strobe_rl">
+        <pose>-0.174 0.174 0.012 0 0 0</pose>
+        <geometry><sphere><radius>0.014</radius></sphere></geometry>
+        <material><ambient>0.04 0.55 0.90 1</ambient><diffuse>0.04 0.65 0.95 1</diffuse><emissive>0.05 0.72 1.0 1</emissive></material>
+      </visual>
+      <visual name="strobe_rr">
+        <pose>-0.174 -0.174 0.012 0 0 0</pose>
+        <geometry><sphere><radius>0.014</radius></sphere></geometry>
+        <material><ambient>0.04 0.55 0.90 1</ambient><diffuse>0.04 0.65 0.95 1</diffuse><emissive>0.05 0.72 1.0 1</emissive></material>
+      </visual>
+    </link>
+    <joint name="NavStrobesJoint" type="fixed">
+      <parent>base_link</parent>
+      <child>nav_strobes_link</child>
+      <pose relative_to="base_link">0 0 0 0 0 0</pose>
+    </joint>
+  </model>
+</sdf>

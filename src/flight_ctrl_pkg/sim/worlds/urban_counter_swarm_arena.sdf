@@ -1,0 +1,884 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<sdf version="1.9">
+  <world name="urban_counter_swarm_arena">
+    <physics type="ode">
+      <max_step_size>0.004</max_step_size>
+      <real_time_factor>1.0</real_time_factor>
+      <real_time_update_rate>250</real_time_update_rate>
+    </physics>
+
+    <!-- Core PX4 + Gazebo Harmonic Systems + Particle Emitter -->
+    <plugin name="gz::sim::systems::Physics" filename="gz-sim-physics-system"/>
+    <plugin name="gz::sim::systems::UserCommands" filename="gz-sim-user-commands-system"/>
+    <plugin name="gz::sim::systems::SceneBroadcaster" filename="gz-sim-scene-broadcaster-system"/>
+    <plugin name="gz::sim::systems::Contact" filename="gz-sim-contact-system"/>
+    <plugin name="gz::sim::systems::Imu" filename="gz-sim-imu-system"/>
+    <plugin name="gz::sim::systems::AirPressure" filename="gz-sim-air-pressure-system"/>
+    <plugin name="gz::sim::systems::ApplyLinkWrench" filename="gz-sim-apply-link-wrench-system"/>
+    <plugin name="gz::sim::systems::NavSat" filename="gz-sim-navsat-system"/>
+    <plugin name="gz::sim::systems::Magnetometer" filename="gz-sim-magnetometer-system"/>
+    <plugin name="gz::sim::systems::WindEffects" filename="gz-sim-wind-effects-system"/>
+    <plugin name="gz::sim::systems::Sensors" filename="gz-sim-sensors-system">
+      <render_engine>ogre2</render_engine>
+    </plugin>
+    <plugin name="gz::sim::systems::ParticleEmitter" filename="gz-sim-particle-emitter-system"/>
+
+    <gravity>0 0 -9.8</gravity>
+    <magnetic_field>6e-06 2.3e-05 -4.2e-05</magnetic_field>
+    <atmosphere type="adiabatic">
+      <temperature>293.15</temperature>
+      <temperature_gradient>-0.0065</temperature_gradient>
+    </atmosphere>
+    <wind>
+      <linear_velocity>0.6 -0.3 0.0</linear_velocity>
+    </wind>
+
+    <!-- Golden-Hour Cinematic Lighting, Dynamic Sky & Atmospheric Fog -->
+    <scene>
+      <grid>false</grid>
+      <ambient>0.48 0.50 0.56 1</ambient>
+      <background>0.52 0.68 0.88 1</background>
+      <shadows>true</shadows>
+      <sky>
+        <time>17.8</time>
+        <sunrise>6.0</sunrise>
+        <sunset>19.0</sunset>
+        <clouds>
+          <speed>8.0</speed>
+          <direction>0.4</direction>
+          <humidity>0.42</humidity>
+          <mean_size>0.45</mean_size>
+          <ambient>0.92 0.82 0.72 1</ambient>
+        </clouds>
+      </sky>
+      <fog>
+        <color>0.82 0.78 0.72 1</color>
+        <type>linear</type>
+        <start>110.0</start>
+        <end>480.0</end>
+      </fog>
+    </scene>
+
+    <light name="sunUTC" type="directional">
+      <pose>0 0 500 0 0 0</pose>
+      <cast_shadows>true</cast_shadows>
+      <intensity>2.4</intensity>
+      <direction>0.68 0.42 -0.34</direction>
+      <diffuse>1.00 0.86 0.68 1</diffuse>
+      <specular>0.72 0.62 0.48 1</specular>
+    </light>
+
+    <!-- 1. Ground Plane & Tiled High-Res Turf Terrain (HSV red/amber safe) -->
+    <model name="ground_plane">
+      <static>true</static>
+      <link name="link">
+        <collision name="collision">
+          <geometry><plane><normal>0 0 1</normal><size>400 400</size></plane></geometry>
+          <surface>
+            <friction><ode><mu>0.85</mu><mu2>0.85</mu2></ode></friction>
+          </surface>
+        </collision>
+        <visual name="outer_meadow">
+          <pose>40 0 -0.012 0 0 0</pose>
+          <cast_shadows>false</cast_shadows>
+          <geometry><plane><normal>0 0 1</normal><size>2400 2400</size></plane></geometry>
+          <material>
+            <ambient>0.78 0.84 0.78 1</ambient>
+            <diffuse>0.88 0.92 0.88 1</diffuse>
+            <pbr><metal><albedo_map>model://arena_assets/materials/textures/terrain_meadow.png</albedo_map><roughness>0.95</roughness><metalness>0.0</metalness></metal></pbr>
+          </material>
+        </visual>
+        <!-- Crisp 16m x 16m tiled meadow grid across [-24..104] x [-40..40] -->
+        <visual name="tile_m16_m32"><pose>-16 -32 0.0 0 0 0</pose><cast_shadows>false</cast_shadows><geometry><plane><normal>0 0 1</normal><size>16 16</size></plane></geometry><material><ambient>0.85 0.90 0.85 1</ambient><diffuse>0.95 0.98 0.95 1</diffuse><pbr><metal><albedo_map>model://arena_assets/materials/textures/terrain_meadow.png</albedo_map><roughness>0.92</roughness></metal></pbr></material></visual>
+        <visual name="tile_m16_m16"><pose>-16 -16 0.0 0 0 0</pose><cast_shadows>false</cast_shadows><geometry><plane><normal>0 0 1</normal><size>16 16</size></plane></geometry><material><ambient>0.85 0.90 0.85 1</ambient><diffuse>0.95 0.98 0.95 1</diffuse><pbr><metal><albedo_map>model://arena_assets/materials/textures/terrain_meadow.png</albedo_map><roughness>0.92</roughness></metal></pbr></material></visual>
+        <visual name="tile_m16_0"><pose>-16 0 0.0 0 0 0</pose><cast_shadows>false</cast_shadows><geometry><plane><normal>0 0 1</normal><size>16 16</size></plane></geometry><material><ambient>0.85 0.90 0.85 1</ambient><diffuse>0.95 0.98 0.95 1</diffuse><pbr><metal><albedo_map>model://arena_assets/materials/textures/terrain_meadow.png</albedo_map><roughness>0.92</roughness></metal></pbr></material></visual>
+        <visual name="tile_m16_16"><pose>-16 16 0.0 0 0 0</pose><cast_shadows>false</cast_shadows><geometry><plane><normal>0 0 1</normal><size>16 16</size></plane></geometry><material><ambient>0.85 0.90 0.85 1</ambient><diffuse>0.95 0.98 0.95 1</diffuse><pbr><metal><albedo_map>model://arena_assets/materials/textures/terrain_meadow.png</albedo_map><roughness>0.92</roughness></metal></pbr></material></visual>
+        <visual name="tile_m16_32"><pose>-16 32 0.0 0 0 0</pose><cast_shadows>false</cast_shadows><geometry><plane><normal>0 0 1</normal><size>16 16</size></plane></geometry><material><ambient>0.85 0.90 0.85 1</ambient><diffuse>0.95 0.98 0.95 1</diffuse><pbr><metal><albedo_map>model://arena_assets/materials/textures/terrain_meadow.png</albedo_map><roughness>0.92</roughness></metal></pbr></material></visual>
+
+        <visual name="tile_0_m32"><pose>0 -32 0.0 0 0 0</pose><cast_shadows>false</cast_shadows><geometry><plane><normal>0 0 1</normal><size>16 16</size></plane></geometry><material><ambient>0.85 0.90 0.85 1</ambient><diffuse>0.95 0.98 0.95 1</diffuse><pbr><metal><albedo_map>model://arena_assets/materials/textures/terrain_meadow.png</albedo_map><roughness>0.92</roughness></metal></pbr></material></visual>
+        <visual name="tile_0_m16"><pose>0 -16 0.0 0 0 0</pose><cast_shadows>false</cast_shadows><geometry><plane><normal>0 0 1</normal><size>16 16</size></plane></geometry><material><ambient>0.85 0.90 0.85 1</ambient><diffuse>0.95 0.98 0.95 1</diffuse><pbr><metal><albedo_map>model://arena_assets/materials/textures/terrain_meadow.png</albedo_map><roughness>0.92</roughness></metal></pbr></material></visual>
+        <visual name="tile_0_0"><pose>0 0 0.0 0 0 0</pose><cast_shadows>false</cast_shadows><geometry><plane><normal>0 0 1</normal><size>16 16</size></plane></geometry><material><ambient>0.85 0.90 0.85 1</ambient><diffuse>0.95 0.98 0.95 1</diffuse><pbr><metal><albedo_map>model://arena_assets/materials/textures/terrain_meadow.png</albedo_map><roughness>0.92</roughness></metal></pbr></material></visual>
+        <visual name="tile_0_16"><pose>0 16 0.0 0 0 0</pose><cast_shadows>false</cast_shadows><geometry><plane><normal>0 0 1</normal><size>16 16</size></plane></geometry><material><ambient>0.85 0.90 0.85 1</ambient><diffuse>0.95 0.98 0.95 1</diffuse><pbr><metal><albedo_map>model://arena_assets/materials/textures/terrain_meadow.png</albedo_map><roughness>0.92</roughness></metal></pbr></material></visual>
+        <visual name="tile_0_32"><pose>0 32 0.0 0 0 0</pose><cast_shadows>false</cast_shadows><geometry><plane><normal>0 0 1</normal><size>16 16</size></plane></geometry><material><ambient>0.85 0.90 0.85 1</ambient><diffuse>0.95 0.98 0.95 1</diffuse><pbr><metal><albedo_map>model://arena_assets/materials/textures/terrain_meadow.png</albedo_map><roughness>0.92</roughness></metal></pbr></material></visual>
+
+        <visual name="tile_16_m32"><pose>16 -32 0.0 0 0 0</pose><cast_shadows>false</cast_shadows><geometry><plane><normal>0 0 1</normal><size>16 16</size></plane></geometry><material><ambient>0.85 0.90 0.85 1</ambient><diffuse>0.95 0.98 0.95 1</diffuse><pbr><metal><albedo_map>model://arena_assets/materials/textures/terrain_meadow.png</albedo_map><roughness>0.92</roughness></metal></pbr></material></visual>
+        <visual name="tile_16_m16"><pose>16 -16 0.0 0 0 0</pose><cast_shadows>false</cast_shadows><geometry><plane><normal>0 0 1</normal><size>16 16</size></plane></geometry><material><ambient>0.85 0.90 0.85 1</ambient><diffuse>0.95 0.98 0.95 1</diffuse><pbr><metal><albedo_map>model://arena_assets/materials/textures/terrain_meadow.png</albedo_map><roughness>0.92</roughness></metal></pbr></material></visual>
+        <visual name="tile_16_0"><pose>16 0 0.0 0 0 0</pose><cast_shadows>false</cast_shadows><geometry><plane><normal>0 0 1</normal><size>16 16</size></plane></geometry><material><ambient>0.85 0.90 0.85 1</ambient><diffuse>0.95 0.98 0.95 1</diffuse><pbr><metal><albedo_map>model://arena_assets/materials/textures/terrain_meadow.png</albedo_map><roughness>0.92</roughness></metal></pbr></material></visual>
+        <visual name="tile_16_16"><pose>16 16 0.0 0 0 0</pose><cast_shadows>false</cast_shadows><geometry><plane><normal>0 0 1</normal><size>16 16</size></plane></geometry><material><ambient>0.85 0.90 0.85 1</ambient><diffuse>0.95 0.98 0.95 1</diffuse><pbr><metal><albedo_map>model://arena_assets/materials/textures/terrain_meadow.png</albedo_map><roughness>0.92</roughness></metal></pbr></material></visual>
+        <visual name="tile_16_32"><pose>16 32 0.0 0 0 0</pose><cast_shadows>false</cast_shadows><geometry><plane><normal>0 0 1</normal><size>16 16</size></plane></geometry><material><ambient>0.85 0.90 0.85 1</ambient><diffuse>0.95 0.98 0.95 1</diffuse><pbr><metal><albedo_map>model://arena_assets/materials/textures/terrain_meadow.png</albedo_map><roughness>0.92</roughness></metal></pbr></material></visual>
+
+        <visual name="tile_32_m32"><pose>32 -32 0.0 0 0 0</pose><cast_shadows>false</cast_shadows><geometry><plane><normal>0 0 1</normal><size>16 16</size></plane></geometry><material><ambient>0.85 0.90 0.85 1</ambient><diffuse>0.95 0.98 0.95 1</diffuse><pbr><metal><albedo_map>model://arena_assets/materials/textures/terrain_meadow.png</albedo_map><roughness>0.92</roughness></metal></pbr></material></visual>
+        <visual name="tile_32_m16"><pose>32 -16 0.0 0 0 0</pose><cast_shadows>false</cast_shadows><geometry><plane><normal>0 0 1</normal><size>16 16</size></plane></geometry><material><ambient>0.85 0.90 0.85 1</ambient><diffuse>0.95 0.98 0.95 1</diffuse><pbr><metal><albedo_map>model://arena_assets/materials/textures/terrain_meadow.png</albedo_map><roughness>0.92</roughness></metal></pbr></material></visual>
+        <visual name="tile_32_0"><pose>32 0 0.0 0 0 0</pose><cast_shadows>false</cast_shadows><geometry><plane><normal>0 0 1</normal><size>16 16</size></plane></geometry><material><ambient>0.85 0.90 0.85 1</ambient><diffuse>0.95 0.98 0.95 1</diffuse><pbr><metal><albedo_map>model://arena_assets/materials/textures/terrain_meadow.png</albedo_map><roughness>0.92</roughness></metal></pbr></material></visual>
+        <visual name="tile_32_16"><pose>32 16 0.0 0 0 0</pose><cast_shadows>false</cast_shadows><geometry><plane><normal>0 0 1</normal><size>16 16</size></plane></geometry><material><ambient>0.85 0.90 0.85 1</ambient><diffuse>0.95 0.98 0.95 1</diffuse><pbr><metal><albedo_map>model://arena_assets/materials/textures/terrain_meadow.png</albedo_map><roughness>0.92</roughness></metal></pbr></material></visual>
+        <visual name="tile_32_32"><pose>32 32 0.0 0 0 0</pose><cast_shadows>false</cast_shadows><geometry><plane><normal>0 0 1</normal><size>16 16</size></plane></geometry><material><ambient>0.85 0.90 0.85 1</ambient><diffuse>0.95 0.98 0.95 1</diffuse><pbr><metal><albedo_map>model://arena_assets/materials/textures/terrain_meadow.png</albedo_map><roughness>0.92</roughness></metal></pbr></material></visual>
+
+        <visual name="tile_48_m32"><pose>48 -32 0.0 0 0 0</pose><cast_shadows>false</cast_shadows><geometry><plane><normal>0 0 1</normal><size>16 16</size></plane></geometry><material><ambient>0.85 0.90 0.85 1</ambient><diffuse>0.95 0.98 0.95 1</diffuse><pbr><metal><albedo_map>model://arena_assets/materials/textures/terrain_meadow.png</albedo_map><roughness>0.92</roughness></metal></pbr></material></visual>
+        <visual name="tile_48_m16"><pose>48 -16 0.0 0 0 0</pose><cast_shadows>false</cast_shadows><geometry><plane><normal>0 0 1</normal><size>16 16</size></plane></geometry><material><ambient>0.85 0.90 0.85 1</ambient><diffuse>0.95 0.98 0.95 1</diffuse><pbr><metal><albedo_map>model://arena_assets/materials/textures/terrain_meadow.png</albedo_map><roughness>0.92</roughness></metal></pbr></material></visual>
+        <visual name="tile_48_0"><pose>48 0 0.0 0 0 0</pose><cast_shadows>false</cast_shadows><geometry><plane><normal>0 0 1</normal><size>16 16</size></plane></geometry><material><ambient>0.85 0.90 0.85 1</ambient><diffuse>0.95 0.98 0.95 1</diffuse><pbr><metal><albedo_map>model://arena_assets/materials/textures/terrain_meadow.png</albedo_map><roughness>0.92</roughness></metal></pbr></material></visual>
+        <visual name="tile_48_16"><pose>48 16 0.0 0 0 0</pose><cast_shadows>false</cast_shadows><geometry><plane><normal>0 0 1</normal><size>16 16</size></plane></geometry><material><ambient>0.85 0.90 0.85 1</ambient><diffuse>0.95 0.98 0.95 1</diffuse><pbr><metal><albedo_map>model://arena_assets/materials/textures/terrain_meadow.png</albedo_map><roughness>0.92</roughness></metal></pbr></material></visual>
+        <visual name="tile_48_32"><pose>48 32 0.0 0 0 0</pose><cast_shadows>false</cast_shadows><geometry><plane><normal>0 0 1</normal><size>16 16</size></plane></geometry><material><ambient>0.85 0.90 0.85 1</ambient><diffuse>0.95 0.98 0.95 1</diffuse><pbr><metal><albedo_map>model://arena_assets/materials/textures/terrain_meadow.png</albedo_map><roughness>0.92</roughness></metal></pbr></material></visual>
+
+        <visual name="tile_64_m32"><pose>64 -32 0.0 0 0 0</pose><cast_shadows>false</cast_shadows><geometry><plane><normal>0 0 1</normal><size>16 16</size></plane></geometry><material><ambient>0.85 0.90 0.85 1</ambient><diffuse>0.95 0.98 0.95 1</diffuse><pbr><metal><albedo_map>model://arena_assets/materials/textures/terrain_meadow.png</albedo_map><roughness>0.92</roughness></metal></pbr></material></visual>
+        <visual name="tile_64_m16"><pose>64 -16 0.0 0 0 0</pose><cast_shadows>false</cast_shadows><geometry><plane><normal>0 0 1</normal><size>16 16</size></plane></geometry><material><ambient>0.85 0.90 0.85 1</ambient><diffuse>0.95 0.98 0.95 1</diffuse><pbr><metal><albedo_map>model://arena_assets/materials/textures/terrain_meadow.png</albedo_map><roughness>0.92</roughness></metal></pbr></material></visual>
+        <visual name="tile_64_0"><pose>64 0 0.0 0 0 0</pose><cast_shadows>false</cast_shadows><geometry><plane><normal>0 0 1</normal><size>16 16</size></plane></geometry><material><ambient>0.85 0.90 0.85 1</ambient><diffuse>0.95 0.98 0.95 1</diffuse><pbr><metal><albedo_map>model://arena_assets/materials/textures/terrain_meadow.png</albedo_map><roughness>0.92</roughness></metal></pbr></material></visual>
+        <visual name="tile_64_16"><pose>64 16 0.0 0 0 0</pose><cast_shadows>false</cast_shadows><geometry><plane><normal>0 0 1</normal><size>16 16</size></plane></geometry><material><ambient>0.85 0.90 0.85 1</ambient><diffuse>0.95 0.98 0.95 1</diffuse><pbr><metal><albedo_map>model://arena_assets/materials/textures/terrain_meadow.png</albedo_map><roughness>0.92</roughness></metal></pbr></material></visual>
+        <visual name="tile_64_32"><pose>64 32 0.0 0 0 0</pose><cast_shadows>false</cast_shadows><geometry><plane><normal>0 0 1</normal><size>16 16</size></plane></geometry><material><ambient>0.85 0.90 0.85 1</ambient><diffuse>0.95 0.98 0.95 1</diffuse><pbr><metal><albedo_map>model://arena_assets/materials/textures/terrain_meadow.png</albedo_map><roughness>0.92</roughness></metal></pbr></material></visual>
+
+        <visual name="tile_80_m32"><pose>80 -32 0.0 0 0 0</pose><cast_shadows>false</cast_shadows><geometry><plane><normal>0 0 1</normal><size>16 16</size></plane></geometry><material><ambient>0.85 0.90 0.85 1</ambient><diffuse>0.95 0.98 0.95 1</diffuse><pbr><metal><albedo_map>model://arena_assets/materials/textures/terrain_meadow.png</albedo_map><roughness>0.92</roughness></metal></pbr></material></visual>
+        <visual name="tile_80_m16"><pose>80 -16 0.0 0 0 0</pose><cast_shadows>false</cast_shadows><geometry><plane><normal>0 0 1</normal><size>16 16</size></plane></geometry><material><ambient>0.85 0.90 0.85 1</ambient><diffuse>0.95 0.98 0.95 1</diffuse><pbr><metal><albedo_map>model://arena_assets/materials/textures/terrain_meadow.png</albedo_map><roughness>0.92</roughness></metal></pbr></material></visual>
+        <visual name="tile_80_0"><pose>80 0 0.0 0 0 0</pose><cast_shadows>false</cast_shadows><geometry><plane><normal>0 0 1</normal><size>16 16</size></plane></geometry><material><ambient>0.85 0.90 0.85 1</ambient><diffuse>0.95 0.98 0.95 1</diffuse><pbr><metal><albedo_map>model://arena_assets/materials/textures/terrain_meadow.png</albedo_map><roughness>0.92</roughness></metal></pbr></material></visual>
+        <visual name="tile_80_16"><pose>80 16 0.0 0 0 0</pose><cast_shadows>false</cast_shadows><geometry><plane><normal>0 0 1</normal><size>16 16</size></plane></geometry><material><ambient>0.85 0.90 0.85 1</ambient><diffuse>0.95 0.98 0.95 1</diffuse><pbr><metal><albedo_map>model://arena_assets/materials/textures/terrain_meadow.png</albedo_map><roughness>0.92</roughness></metal></pbr></material></visual>
+        <visual name="tile_80_32"><pose>80 32 0.0 0 0 0</pose><cast_shadows>false</cast_shadows><geometry><plane><normal>0 0 1</normal><size>16 16</size></plane></geometry><material><ambient>0.85 0.90 0.85 1</ambient><diffuse>0.95 0.98 0.95 1</diffuse><pbr><metal><albedo_map>model://arena_assets/materials/textures/terrain_meadow.png</albedo_map><roughness>0.92</roughness></metal></pbr></material></visual>
+
+        <visual name="tile_96_m16"><pose>96 -16 0.0 0 0 0</pose><cast_shadows>false</cast_shadows><geometry><plane><normal>0 0 1</normal><size>16 16</size></plane></geometry><material><ambient>0.85 0.90 0.85 1</ambient><diffuse>0.95 0.98 0.95 1</diffuse><pbr><metal><albedo_map>model://arena_assets/materials/textures/terrain_meadow.png</albedo_map><roughness>0.92</roughness></metal></pbr></material></visual>
+        <visual name="tile_96_0"><pose>96 0 0.0 0 0 0</pose><cast_shadows>false</cast_shadows><geometry><plane><normal>0 0 1</normal><size>16 16</size></plane></geometry><material><ambient>0.85 0.90 0.85 1</ambient><diffuse>0.95 0.98 0.95 1</diffuse><pbr><metal><albedo_map>model://arena_assets/materials/textures/terrain_meadow.png</albedo_map><roughness>0.92</roughness></metal></pbr></material></visual>
+        <visual name="tile_96_16"><pose>96 16 0.0 0 0 0</pose><cast_shadows>false</cast_shadows><geometry><plane><normal>0 0 1</normal><size>16 16</size></plane></geometry><material><ambient>0.85 0.90 0.85 1</ambient><diffuse>0.95 0.98 0.95 1</diffuse><pbr><metal><albedo_map>model://arena_assets/materials/textures/terrain_meadow.png</albedo_map><roughness>0.92</roughness></metal></pbr></material></visual>
+
+        <!-- Far-horizon perimeter hills strictly outside arena_bounds [-16..96] x [-34..34] -->
+        <visual name="hill_north">
+          <pose>42.0 72.0 -10.0 0 0 0</pose>
+          <cast_shadows>false</cast_shadows>
+          <geometry><ellipsoid><radii>48.0 24.0 20.0</radii></ellipsoid></geometry>
+          <material>
+            <ambient>0.82 0.88 0.82 1</ambient><diffuse>0.92 0.96 0.92 1</diffuse>
+            <pbr><metal><albedo_map>model://arena_assets/materials/textures/terrain_hill.png</albedo_map><roughness>0.95</roughness></metal></pbr>
+          </material>
+        </visual>
+        <visual name="hill_south">
+          <pose>40.0 -72.0 -10.0 0 0 0</pose>
+          <cast_shadows>false</cast_shadows>
+          <geometry><ellipsoid><radii>48.0 24.0 18.0</radii></ellipsoid></geometry>
+          <material>
+            <ambient>0.82 0.88 0.82 1</ambient><diffuse>0.92 0.96 0.92 1</diffuse>
+            <pbr><metal><albedo_map>model://arena_assets/materials/textures/terrain_hill.png</albedo_map><roughness>0.95</roughness></metal></pbr>
+          </material>
+        </visual>
+        <visual name="hill_east">
+          <pose>145.0 0.0 -12.0 0 0 0</pose>
+          <cast_shadows>false</cast_shadows>
+          <geometry><ellipsoid><radii>28.0 54.0 24.0</radii></ellipsoid></geometry>
+          <material>
+            <ambient>0.82 0.88 0.82 1</ambient><diffuse>0.92 0.96 0.92 1</diffuse>
+            <pbr><metal><albedo_map>model://arena_assets/materials/textures/terrain_hill.png</albedo_map><roughness>0.95</roughness></metal></pbr>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- 2. Airfield Runway, Squadron Apron & 8 Helipads (H1..H8 matching obstacles.yaml) -->
+    <model name="airfield_runway_and_pads">
+      <static>true</static>
+      <pose>0 0 0 0 0 0</pose>
+      <link name="link">
+        <visual name="runway_seg_1">
+          <pose>16.5 1.5 0.004 0 0 0</pose>
+          <cast_shadows>false</cast_shadows>
+          <geometry><box><size>30.0 16.0 0.008</size></box></geometry>
+          <material>
+            <ambient>0.85 0.85 0.88 1</ambient><diffuse>0.95 0.95 0.98 1</diffuse>
+            <pbr><metal><albedo_map>model://arena_assets/materials/textures/asphalt_runway.png</albedo_map><roughness>0.84</roughness></metal></pbr>
+          </material>
+        </visual>
+        <visual name="runway_seg_2">
+          <pose>46.5 1.5 0.004 0 0 0</pose>
+          <cast_shadows>false</cast_shadows>
+          <geometry><box><size>30.0 16.0 0.008</size></box></geometry>
+          <material>
+            <ambient>0.85 0.85 0.88 1</ambient><diffuse>0.95 0.95 0.98 1</diffuse>
+            <pbr><metal><albedo_map>model://arena_assets/materials/textures/asphalt_runway.png</albedo_map><roughness>0.84</roughness></metal></pbr>
+          </material>
+        </visual>
+        <visual name="runway_seg_3">
+          <pose>76.5 1.5 0.004 0 0 0</pose>
+          <cast_shadows>false</cast_shadows>
+          <geometry><box><size>30.0 16.0 0.008</size></box></geometry>
+          <material>
+            <ambient>0.85 0.85 0.88 1</ambient><diffuse>0.95 0.95 0.98 1</diffuse>
+            <pbr><metal><albedo_map>model://arena_assets/materials/textures/asphalt_runway.png</albedo_map><roughness>0.84</roughness></metal></pbr>
+          </material>
+        </visual>
+
+        <visual name="apron_pad_strip">
+          <pose>-2.0 1.25 0.002 0 0 0</pose>
+          <cast_shadows>false</cast_shadows>
+          <geometry><box><size>8.4 15.0 0.008</size></box></geometry>
+          <material>
+            <ambient>0.26 0.29 0.34 1</ambient><diffuse>0.34 0.38 0.44 1</diffuse>
+            <pbr><metal><roughness>0.80</roughness><metalness>0.1</metalness></metal></pbr>
+          </material>
+        </visual>
+
+        <!-- H1..H8 matching obstacles.yaml helipads -->
+        <visual name="helipad_h1">
+          <pose>0.0 0.0 0.008 0 0 0</pose>
+          <cast_shadows>false</cast_shadows>
+          <geometry><box><size>2.2 2.2 0.006</size></box></geometry>
+          <material><ambient>0.95 0.95 0.95 1</ambient><diffuse>1 1 1 1</diffuse><pbr><metal><albedo_map>model://arena_assets/materials/textures/helipad_h1.png</albedo_map><roughness>0.75</roughness></metal></pbr></material>
+        </visual>
+        <visual name="helipad_h2">
+          <pose>0.0 3.0 0.008 0 0 0</pose>
+          <cast_shadows>false</cast_shadows>
+          <geometry><box><size>2.2 2.2 0.006</size></box></geometry>
+          <material><ambient>0.95 0.95 0.95 1</ambient><diffuse>1 1 1 1</diffuse><pbr><metal><albedo_map>model://arena_assets/materials/textures/helipad_h2.png</albedo_map><roughness>0.75</roughness></metal></pbr></material>
+        </visual>
+        <visual name="helipad_h3">
+          <pose>0.0 6.0 0.008 0 0 0</pose>
+          <cast_shadows>false</cast_shadows>
+          <geometry><box><size>2.2 2.2 0.006</size></box></geometry>
+          <material><ambient>0.95 0.95 0.95 1</ambient><diffuse>1 1 1 1</diffuse><pbr><metal><albedo_map>model://arena_assets/materials/textures/helipad_h3.png</albedo_map><roughness>0.75</roughness></metal></pbr></material>
+        </visual>
+        <visual name="helipad_h4">
+          <pose>-4.0 0.0 0.008 0 0 0</pose>
+          <cast_shadows>false</cast_shadows>
+          <geometry><box><size>2.2 2.2 0.006</size></box></geometry>
+          <material><ambient>0.95 0.95 0.95 1</ambient><diffuse>1 1 1 1</diffuse><pbr><metal><albedo_map>model://arena_assets/materials/textures/helipad_h4.png</albedo_map><roughness>0.75</roughness></metal></pbr></material>
+        </visual>
+        <visual name="helipad_h5">
+          <pose>-4.0 3.0 0.008 0 0 0</pose>
+          <cast_shadows>false</cast_shadows>
+          <geometry><box><size>2.2 2.2 0.006</size></box></geometry>
+          <material><ambient>0.95 0.95 0.95 1</ambient><diffuse>1 1 1 1</diffuse><pbr><metal><albedo_map>model://arena_assets/materials/textures/helipad_h5.png</albedo_map><roughness>0.75</roughness></metal></pbr></material>
+        </visual>
+        <visual name="helipad_h6">
+          <pose>-4.0 6.0 0.008 0 0 0</pose>
+          <cast_shadows>false</cast_shadows>
+          <geometry><box><size>2.2 2.2 0.006</size></box></geometry>
+          <material><ambient>0.95 0.95 0.95 1</ambient><diffuse>1 1 1 1</diffuse><pbr><metal><albedo_map>model://arena_assets/materials/textures/helipad_h6.png</albedo_map><roughness>0.75</roughness></metal></pbr></material>
+        </visual>
+        <visual name="helipad_h7">
+          <pose>0.0 -3.5 0.008 0 0 0</pose>
+          <cast_shadows>false</cast_shadows>
+          <geometry><box><size>2.2 2.2 0.006</size></box></geometry>
+          <material><ambient>0.95 0.95 0.95 1</ambient><diffuse>1 1 1 1</diffuse><pbr><metal><albedo_map>model://arena_assets/materials/textures/helipad_h7.png</albedo_map><roughness>0.75</roughness></metal></pbr></material>
+        </visual>
+        <visual name="helipad_h8">
+          <pose>-4.0 -3.5 0.008 0 0 0</pose>
+          <cast_shadows>false</cast_shadows>
+          <geometry><box><size>2.2 2.2 0.006</size></box></geometry>
+          <material><ambient>0.95 0.95 0.95 1</ambient><diffuse>1 1 1 1</diffuse><pbr><metal><albedo_map>model://arena_assets/materials/textures/helipad_h8.png</albedo_map><roughness>0.75</roughness></metal></pbr></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- 3. 12 3D Obstacles (1-to-1 <collision> match to config/obstacles.yaml; zero red/amber hues) -->
+
+    <!-- 3.1 obs_radar_tower: cylinder cx=-7.0, cy=16.5, r=2.0, z=[0, 15.0] -->
+    <model name="obs_radar_tower">
+      <pose>-7.0 16.5 0 0 0 0</pose>
+      <link name="tower_base">
+        <gravity>false</gravity>
+        <inertial><mass>500</mass><inertia><ixx>100</ixx><iyy>100</iyy><izz>100</izz></inertia></inertial>
+        <collision name="collision">
+          <pose>0 0 7.5 0 0 0</pose>
+          <geometry><cylinder><radius>2.0</radius><length>15.0</length></cylinder></geometry>
+        </collision>
+        <visual name="shaft">
+          <pose>0 0 5.8 0 0 0</pose>
+          <geometry><cylinder><radius>1.35</radius><length>11.6</length></cylinder></geometry>
+          <material>
+            <ambient>0.75 0.78 0.84 1</ambient><diffuse>0.88 0.90 0.95 1</diffuse>
+            <pbr><metal><albedo_map>model://arena_assets/materials/textures/hangar_siding.png</albedo_map><roughness>0.65</roughness></metal></pbr>
+          </material>
+        </visual>
+        <visual name="glass_cabin">
+          <pose>0 0 12.4 0 0 0</pose>
+          <geometry><cylinder><radius>1.70</radius><length>1.6</length></cylinder></geometry>
+          <material>
+            <ambient>0.10 0.34 0.58 1</ambient><diffuse>0.18 0.52 0.84 1</diffuse>
+            <pbr><metal><roughness>0.12</roughness><metalness>0.85</metalness></metal></pbr>
+          </material>
+          <plugin filename="gz-sim-thermal-system" name="gz::sim::systems::Thermal">
+            <temperature>314.0</temperature>
+          </plugin>
+        </visual>
+        <visual name="roof_cap">
+          <pose>0 0 13.4 0 0 0</pose>
+          <geometry><cylinder><radius>1.85</radius><length>0.4</length></cylinder></geometry>
+          <material><ambient>0.22 0.25 0.30 1</ambient><diffuse>0.34 0.38 0.44 1</diffuse></material>
+        </visual>
+      </link>
+      <joint name="tower_fix" type="fixed"><parent>world</parent><child>tower_base</child></joint>
+      <link name="radar_dish">
+        <gravity>false</gravity>
+        <pose>0 0 14.35 0 0 0</pose>
+        <inertial><mass>2.0</mass><inertia><ixx>0.2</ixx><iyy>0.2</iyy><izz>0.2</izz></inertia></inertial>
+        <visual name="dish_bar">
+          <geometry><box><size>3.2 0.28 0.55</size></box></geometry>
+          <material>
+            <ambient>0.80 0.84 0.88 1</ambient><diffuse>0.92 0.95 0.98 1</diffuse>
+            <pbr><metal><roughness>0.28</roughness><metalness>0.70</metalness></metal></pbr>
+          </material>
+        </visual>
+      </link>
+      <joint name="radar_spin_joint" type="revolute">
+        <parent>tower_base</parent><child>radar_dish</child>
+        <axis><xyz>0 0 1</xyz><limit><lower>-1e16</lower><upper>1e16</upper></limit></axis>
+      </joint>
+      <plugin filename="gz-sim-joint-controller-system" name="gz::sim::systems::JointController">
+        <joint_name>radar_spin_joint</joint_name>
+        <initial_velocity>1.4</initial_velocity>
+      </plugin>
+    </model>
+
+    <!-- 3.2 obs_container_depot_nw: box cx=5.5, cy=15.5, sx=6.0, sy=5.2, z=[0, 5.2] -->
+    <model name="obs_container_depot_nw">
+      <static>true</static>
+      <pose>5.5 15.5 0 0 0 0</pose>
+      <link name="link">
+        <collision name="collision">
+          <pose>0 0 2.6 0 0 0</pose>
+          <geometry><box><size>6.0 5.2 5.2</size></box></geometry>
+        </collision>
+        <visual name="container_low_n">
+          <pose>0 1.32 1.3 0 0 0</pose>
+          <geometry><box><size>5.96 2.45 2.6</size></box></geometry>
+          <material>
+            <ambient>0.85 0.88 0.92 1</ambient><diffuse>0.96 0.98 1.0 1</diffuse>
+            <pbr><metal><albedo_map>model://arena_assets/materials/textures/container_blue.png</albedo_map><roughness>0.55</roughness></metal></pbr>
+          </material>
+        </visual>
+        <visual name="container_low_s">
+          <pose>0 -1.32 1.3 0 0 0</pose>
+          <geometry><box><size>5.96 2.45 2.6</size></box></geometry>
+          <material>
+            <ambient>0.85 0.88 0.92 1</ambient><diffuse>0.96 0.98 1.0 1</diffuse>
+            <pbr><metal><albedo_map>model://arena_assets/materials/textures/container_blue.png</albedo_map><roughness>0.55</roughness></metal></pbr>
+          </material>
+        </visual>
+        <visual name="container_top">
+          <pose>0 0 3.9 0 0 0</pose>
+          <geometry><box><size>5.96 2.45 2.58</size></box></geometry>
+          <material>
+            <ambient>0.72 0.78 0.84 1</ambient><diffuse>0.82 0.88 0.94 1</diffuse>
+            <pbr><metal><albedo_map>model://arena_assets/materials/textures/hangar_siding.png</albedo_map><roughness>0.48</roughness><metalness>0.35</metalness></metal></pbr>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- 3.3 obs_hangar_north: box cx=21.0, cy=19.5, sx=11.0, sy=6.4, z=[0, 6.2] -->
+    <model name="obs_hangar_north">
+      <static>true</static>
+      <pose>21.0 19.5 0 0 0 0</pose>
+      <link name="link">
+        <collision name="collision">
+          <pose>0 0 3.1 0 0 0</pose>
+          <geometry><box><size>11.0 6.4 6.2</size></box></geometry>
+        </collision>
+        <visual name="body">
+          <pose>0 0 2.9 0 0 0</pose>
+          <geometry><box><size>10.6 6.0 5.8</size></box></geometry>
+          <material>
+            <ambient>0.82 0.85 0.88 1</ambient><diffuse>0.92 0.95 0.98 1</diffuse>
+            <pbr><metal><albedo_map>model://arena_assets/materials/textures/hangar_siding.png</albedo_map><roughness>0.58</roughness></metal></pbr>
+          </material>
+        </visual>
+        <visual name="roof">
+          <pose>0 0 6.0 0 0 0</pose>
+          <geometry><box><size>10.96 6.36 0.38</size></box></geometry>
+          <material>
+            <ambient>0.85 0.88 0.92 1</ambient><diffuse>0.95 0.98 1.0 1</diffuse>
+            <pbr><metal><albedo_map>model://arena_assets/materials/textures/hangar_roof.png</albedo_map><roughness>0.32</roughness><metalness>0.45</metalness></metal></pbr>
+          </material>
+        </visual>
+        <visual name="bay_door">
+          <pose>0 -3.02 2.1 0 0 0</pose>
+          <geometry><box><size>6.4 0.14 4.2</size></box></geometry>
+          <material><ambient>0.14 0.18 0.22 1</ambient><diffuse>0.22 0.26 0.32 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- 3.4 obs_hangar_south: box cx=16.0, cy=-16.5, sx=10.0, sy=6.0, z=[0, 5.8] -->
+    <model name="obs_hangar_south">
+      <static>true</static>
+      <pose>16.0 -16.5 0 0 0 0</pose>
+      <link name="link">
+        <collision name="collision">
+          <pose>0 0 2.9 0 0 0</pose>
+          <geometry><box><size>10.0 6.0 5.8</size></box></geometry>
+        </collision>
+        <visual name="body">
+          <pose>0 0 2.7 0 0 0</pose>
+          <geometry><box><size>9.6 5.6 5.4</size></box></geometry>
+          <material>
+            <ambient>0.80 0.84 0.88 1</ambient><diffuse>0.90 0.94 0.98 1</diffuse>
+            <pbr><metal><albedo_map>model://arena_assets/materials/textures/hangar_siding.png</albedo_map><roughness>0.60</roughness></metal></pbr>
+          </material>
+        </visual>
+        <visual name="roof">
+          <pose>0 0 5.6 0 0 0</pose>
+          <geometry><box><size>9.96 5.96 0.38</size></box></geometry>
+          <material>
+            <ambient>0.85 0.88 0.92 1</ambient><diffuse>0.95 0.98 1.0 1</diffuse>
+            <pbr><metal><albedo_map>model://arena_assets/materials/textures/hangar_roof.png</albedo_map><roughness>0.34</roughness><metalness>0.42</metalness></metal></pbr>
+          </material>
+        </visual>
+        <visual name="bay_door">
+          <pose>0 2.82 2.0 0 0 0</pose>
+          <geometry><box><size>5.8 0.14 4.0</size></box></geometry>
+          <material><ambient>0.14 0.18 0.24 1</ambient><diffuse>0.22 0.26 0.34 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- 3.5 obs_fuel_depot_se: box cx=31.5, cy=-21.0, sx=6.4, sy=4.2, z=[0, 4.0] -->
+    <model name="obs_fuel_depot_se">
+      <static>true</static>
+      <pose>31.5 -21.0 0 0 0 0</pose>
+      <link name="link">
+        <collision name="collision">
+          <pose>0 0 2.0 0 0 0</pose>
+          <geometry><box><size>6.4 4.2 4.0</size></box></geometry>
+        </collision>
+        <visual name="plinth">
+          <pose>0 0 0.25 0 0 0</pose>
+          <geometry><box><size>6.36 4.16 0.50</size></box></geometry>
+          <material><ambient>0.28 0.31 0.36 1</ambient><diffuse>0.38 0.42 0.48 1</diffuse></material>
+        </visual>
+        <visual name="tank_north">
+          <pose>0 1.0 1.85 0 1.570796 0</pose>
+          <geometry><cylinder><radius>0.95</radius><length>5.6</length></cylinder></geometry>
+          <material>
+            <ambient>0.52 0.58 0.65 1</ambient><diffuse>0.68 0.74 0.82 1</diffuse>
+            <pbr><metal><roughness>0.30</roughness><metalness>0.75</metalness></metal></pbr>
+          </material>
+          <plugin filename="gz-sim-thermal-system" name="gz::sim::systems::Thermal">
+            <temperature>310.0</temperature>
+          </plugin>
+        </visual>
+        <visual name="tank_south">
+          <pose>0 -1.0 1.85 0 1.570796 0</pose>
+          <geometry><cylinder><radius>0.95</radius><length>5.6</length></cylinder></geometry>
+          <material>
+            <ambient>0.52 0.58 0.65 1</ambient><diffuse>0.68 0.74 0.82 1</diffuse>
+            <pbr><metal><roughness>0.30</roughness><metalness>0.75</metalness></metal></pbr>
+          </material>
+        </visual>
+        <visual name="top_catwalk">
+          <pose>0 0 3.35 0 0 0</pose>
+          <geometry><box><size>5.2 2.4 0.16</size></box></geometry>
+          <material><ambient>0.18 0.22 0.26 1</ambient><diffuse>0.26 0.30 0.36 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- 3.6 obs_canyon_tower_nw: box cx=36.0, cy=10.5, sx=5.0, sy=5.0, z=[0, 14.0] -->
+    <model name="obs_canyon_tower_nw">
+      <static>true</static>
+      <pose>36.0 10.5 0 0 0 0</pose>
+      <link name="link">
+        <collision name="collision">
+          <pose>0 0 7.0 0 0 0</pose>
+          <geometry><box><size>5.0 5.0 14.0</size></box></geometry>
+        </collision>
+        <visual name="core">
+          <pose>0 0 6.85 0 0 0</pose>
+          <geometry><box><size>4.88 4.88 13.7</size></box></geometry>
+          <material>
+            <ambient>0.24 0.28 0.34 1</ambient><diffuse>0.34 0.38 0.45 1</diffuse>
+            <pbr><metal><roughness>0.65</roughness><metalness>0.2</metalness></metal></pbr>
+          </material>
+        </visual>
+        <visual name="glass_band_1">
+          <pose>0 0 4.5 0 0 0</pose>
+          <geometry><box><size>4.96 4.96 2.8</size></box></geometry>
+          <material>
+            <ambient>0.10 0.32 0.50 1</ambient><diffuse>0.16 0.46 0.72 1</diffuse>
+            <pbr><metal><roughness>0.10</roughness><metalness>0.88</metalness></metal></pbr>
+          </material>
+        </visual>
+        <visual name="glass_band_2">
+          <pose>0 0 9.8 0 0 0</pose>
+          <geometry><box><size>4.96 4.96 3.2</size></box></geometry>
+          <material>
+            <ambient>0.10 0.32 0.50 1</ambient><diffuse>0.16 0.46 0.72 1</diffuse>
+            <pbr><metal><roughness>0.10</roughness><metalness>0.88</metalness></metal></pbr>
+          </material>
+        </visual>
+        <visual name="rooftop_trim">
+          <pose>0 0 13.84 0 0 0</pose>
+          <geometry><box><size>4.96 4.96 0.28</size></box></geometry>
+          <material><ambient>0.04 0.55 0.82 1</ambient><diffuse>0.06 0.72 0.96 1</diffuse><emissive>0.02 0.28 0.45 1</emissive></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- 3.7 obs_canyon_tower_sw: box cx=36.0, cy=-9.5, sx=5.0, sy=5.0, z=[0, 12.5] -->
+    <model name="obs_canyon_tower_sw">
+      <static>true</static>
+      <pose>36.0 -9.5 0 0 0 0</pose>
+      <link name="link">
+        <collision name="collision">
+          <pose>0 0 6.25 0 0 0</pose>
+          <geometry><box><size>5.0 5.0 12.5</size></box></geometry>
+        </collision>
+        <visual name="podium">
+          <pose>0 0 3.0 0 0 0</pose>
+          <geometry><box><size>4.96 4.96 6.0</size></box></geometry>
+          <material>
+            <ambient>0.58 0.62 0.68 1</ambient><diffuse>0.72 0.76 0.82 1</diffuse>
+            <pbr><metal><albedo_map>model://arena_assets/materials/textures/hangar_siding.png</albedo_map><roughness>0.72</roughness></metal></pbr>
+          </material>
+        </visual>
+        <visual name="upper_tower">
+          <pose>0 0 9.1 0 0 0</pose>
+          <geometry><box><size>4.56 4.56 6.2</size></box></geometry>
+          <material>
+            <ambient>0.36 0.42 0.50 1</ambient><diffuse>0.48 0.54 0.64 1</diffuse>
+            <pbr><metal><roughness>0.45</roughness><metalness>0.35</metalness></metal></pbr>
+          </material>
+        </visual>
+        <visual name="rooftop_trim">
+          <pose>0 0 12.34 0 0 0</pose>
+          <geometry><box><size>4.56 4.56 0.28</size></box></geometry>
+          <material><ambient>0.04 0.55 0.82 1</ambient><diffuse>0.06 0.72 0.96 1</diffuse><emissive>0.02 0.28 0.45 1</emissive></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- 3.8 obs_comm_pylon_center: cylinder cx=49.0, cy=1.5, r=1.4, z=[0, 16.5] -->
+    <model name="obs_comm_pylon_center">
+      <static>true</static>
+      <pose>49.0 1.5 0 0 0 0</pose>
+      <link name="link">
+        <collision name="collision">
+          <pose>0 0 8.25 0 0 0</pose>
+          <geometry><cylinder><radius>1.4</radius><length>16.5</length></cylinder></geometry>
+        </collision>
+        <visual name="pedestal">
+          <pose>0 0 0.8 0 0 0</pose>
+          <geometry><cylinder><radius>1.36</radius><length>1.6</length></cylinder></geometry>
+          <material><ambient>0.28 0.32 0.38 1</ambient><diffuse>0.38 0.42 0.50 1</diffuse></material>
+        </visual>
+        <visual name="mast">
+          <pose>0 0 8.6 0 0 0</pose>
+          <geometry><cylinder><radius>0.52</radius><length>14.0</length></cylinder></geometry>
+          <material>
+            <ambient>0.62 0.68 0.74 1</ambient><diffuse>0.76 0.82 0.88 1</diffuse>
+            <pbr><metal><roughness>0.32</roughness><metalness>0.82</metalness></metal></pbr>
+          </material>
+        </visual>
+        <visual name="ring_mid">
+          <pose>0 0 9.0 0 0 0</pose>
+          <geometry><cylinder><radius>1.15</radius><length>0.4</length></cylinder></geometry>
+          <material><ambient>0.12 0.44 0.72 1</ambient><diffuse>0.18 0.58 0.90 1</diffuse></material>
+        </visual>
+        <visual name="ring_top">
+          <pose>0 0 13.0 0 0 0</pose>
+          <geometry><cylinder><radius>1.05</radius><length>0.4</length></cylinder></geometry>
+          <material><ambient>0.12 0.44 0.72 1</ambient><diffuse>0.18 0.58 0.90 1</diffuse></material>
+        </visual>
+        <visual name="beacon_tip">
+          <pose>0 0 16.05 0 0 0</pose>
+          <geometry><sphere><radius>0.38</radius></sphere></geometry>
+          <material><ambient>0.05 0.75 0.95 1</ambient><diffuse>0.10 0.90 1.0 1</diffuse><emissive>0.05 0.65 0.95 1</emissive></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- 3.9 obs_bunker_mid_n: box cx=58.0, cy=15.5, sx=7.0, sy=5.4, z=[0, 7.5] -->
+    <model name="obs_bunker_mid_n">
+      <static>true</static>
+      <pose>58.0 15.5 0 0 0 0</pose>
+      <link name="link">
+        <collision name="collision">
+          <pose>0 0 3.75 0 0 0</pose>
+          <geometry><box><size>7.0 5.4 7.5</size></box></geometry>
+        </collision>
+        <visual name="lower_bastion">
+          <pose>0 0 2.5 0 0 0</pose>
+          <geometry><box><size>6.96 5.36 5.0</size></box></geometry>
+          <material><ambient>0.34 0.37 0.42 1</ambient><diffuse>0.45 0.49 0.55 1</diffuse></material>
+        </visual>
+        <visual name="upper_deck">
+          <pose>0 0 6.1 0 0 0</pose>
+          <geometry><box><size>5.8 4.4 2.2</size></box></geometry>
+          <material>
+            <ambient>0.22 0.28 0.36 1</ambient><diffuse>0.30 0.38 0.48 1</diffuse>
+            <pbr><metal><roughness>0.40</roughness><metalness>0.50</metalness></metal></pbr>
+          </material>
+        </visual>
+        <visual name="radome">
+          <pose>0 0 6.85 0 0 0</pose>
+          <geometry><sphere><radius>0.62</radius></sphere></geometry>
+          <material><ambient>0.82 0.86 0.92 1</ambient><diffuse>0.94 0.96 1.0 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- 3.10 obs_cooling_silo_s: cylinder cx=56.0, cy=-14.0, r=2.8, z=[0, 11.0] -->
+    <model name="obs_cooling_silo_s">
+      <static>true</static>
+      <pose>56.0 -14.0 0 0 0 0</pose>
+      <link name="link">
+        <collision name="collision">
+          <pose>0 0 5.5 0 0 0</pose>
+          <geometry><cylinder><radius>2.8</radius><length>11.0</length></cylinder></geometry>
+        </collision>
+        <visual name="shell">
+          <pose>0 0 5.3 0 0 0</pose>
+          <geometry><cylinder><radius>2.74</radius><length>10.6</length></cylinder></geometry>
+          <material>
+            <ambient>0.64 0.68 0.74 1</ambient><diffuse>0.78 0.82 0.88 1</diffuse>
+            <pbr><metal><albedo_map>model://arena_assets/materials/textures/hangar_siding.png</albedo_map><roughness>0.65</roughness></metal></pbr>
+          </material>
+        </visual>
+        <visual name="top_ring">
+          <pose>0 0 10.78 0 0 0</pose>
+          <geometry><cylinder><radius>2.78</radius><length>0.40</length></cylinder></geometry>
+          <material><ambient>0.18 0.24 0.32 1</ambient><diffuse>0.26 0.34 0.44 1</diffuse></material>
+        </visual>
+        <visual name="thermal_vent">
+          <pose>0 0 10.90 0 0 0</pose>
+          <geometry><cylinder><radius>1.9</radius><length>0.10</length></cylinder></geometry>
+          <material><ambient>0.12 0.14 0.18 1</ambient><diffuse>0.18 0.20 0.24 1</diffuse></material>
+          <plugin filename="gz-sim-thermal-system" name="gz::sim::systems::Thermal">
+            <temperature>318.0</temperature>
+          </plugin>
+        </visual>
+        <particle_emitter name="silo_steam" type="cylinder">
+          <pose>0 0 11.05 0 0 0</pose>
+          <emitting>true</emitting>
+          <size>2.2 2.2 0.2</size>
+          <particle_size>0.9 0.9 0.9</particle_size>
+          <lifetime>3.0</lifetime>
+          <rate>6</rate>
+          <min_velocity>0.4</min_velocity>
+          <max_velocity>1.1</max_velocity>
+          <scale_rate>0.6</scale_rate>
+          <color_start>0.88 0.92 0.96 0.35</color_start>
+          <color_end>0.95 0.97 1.0 0.0</color_end>
+        </particle_emitter>
+      </link>
+    </model>
+
+    <!-- 3.11 obs_east_watchtower: cylinder cx=71.0, cy=6.5, r=1.8, z=[0, 14.5] -->
+    <model name="obs_east_watchtower">
+      <static>true</static>
+      <pose>71.0 6.5 0 0 0 0</pose>
+      <link name="link">
+        <collision name="collision">
+          <pose>0 0 7.25 0 0 0</pose>
+          <geometry><cylinder><radius>1.8</radius><length>14.5</length></cylinder></geometry>
+        </collision>
+        <visual name="column">
+          <pose>0 0 6.0 0 0 0</pose>
+          <geometry><cylinder><radius>1.28</radius><length>12.0</length></cylinder></geometry>
+          <material><ambient>0.42 0.46 0.52 1</ambient><diffuse>0.55 0.60 0.68 1</diffuse></material>
+        </visual>
+        <visual name="obs_pod">
+          <pose>0 0 12.9 0 0 0</pose>
+          <geometry><cylinder><radius>1.76</radius><length>1.8</length></cylinder></geometry>
+          <material>
+            <ambient>0.10 0.36 0.58 1</ambient><diffuse>0.16 0.52 0.84 1</diffuse>
+            <pbr><metal><roughness>0.12</roughness><metalness>0.85</metalness></metal></pbr>
+          </material>
+        </visual>
+        <visual name="roof_spire">
+          <pose>0 0 14.12 0 0 0</pose>
+          <geometry><cylinder><radius>1.4</radius><length>0.7</length></cylinder></geometry>
+          <material><ambient>0.04 0.55 0.85 1</ambient><diffuse>0.08 0.75 0.98 1</diffuse><emissive>0.02 0.30 0.48 1</emissive></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- 3.12 obs_east_warehouse: box cx=72.0, cy=-8.5, sx=8.0, sy=5.6, z=[0, 6.8] -->
+    <model name="obs_east_warehouse">
+      <static>true</static>
+      <pose>72.0 -8.5 0 0 0 0</pose>
+      <link name="link">
+        <collision name="collision">
+          <pose>0 0 3.4 0 0 0</pose>
+          <geometry><box><size>8.0 5.6 6.8</size></box></geometry>
+        </collision>
+        <visual name="body">
+          <pose>0 0 3.2 0 0 0</pose>
+          <geometry><box><size>7.8 5.4 6.4</size></box></geometry>
+          <material>
+            <ambient>0.80 0.84 0.88 1</ambient><diffuse>0.92 0.95 0.98 1</diffuse>
+            <pbr><metal><albedo_map>model://arena_assets/materials/textures/hangar_siding.png</albedo_map><roughness>0.60</roughness></metal></pbr>
+          </material>
+        </visual>
+        <visual name="roof">
+          <pose>0 0 6.6 0 0 0</pose>
+          <geometry><box><size>7.96 5.56 0.36</size></box></geometry>
+          <material>
+            <ambient>0.85 0.88 0.92 1</ambient><diffuse>0.95 0.98 1.0 1</diffuse>
+            <pbr><metal><albedo_map>model://arena_assets/materials/textures/hangar_roof.png</albedo_map><roughness>0.34</roughness><metalness>0.42</metalness></metal></pbr>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- 4. Visual-Only NFZ Ground Rings (cyan/ice-white, HSV red/amber safe, zero collision) -->
+    <model name="nfz_ground_markers">
+      <static>true</static>
+      <link name="link">
+        <visual name="nfz_radar_emitter_ring">
+          <pose>-7.0 16.5 0.010 0 0 0</pose>
+          <cast_shadows>false</cast_shadows>
+          <geometry><cylinder><radius>4.5</radius><length>0.004</length></cylinder></geometry>
+          <material>
+            <ambient>0.0 0.65 0.90 0.30</ambient>
+            <diffuse>0.0 0.72 0.95 0.30</diffuse>
+            <emissive>0.0 0.55 0.82 0.35</emissive>
+          </material>
+        </visual>
+        <visual name="nfz_command_core_ring">
+          <pose>58.0 15.5 0.010 0 0 0</pose>
+          <cast_shadows>false</cast_shadows>
+          <geometry><cylinder><radius>6.0</radius><length>0.004</length></cylinder></geometry>
+          <material>
+            <ambient>0.0 0.65 0.90 0.30</ambient>
+            <diffuse>0.0 0.72 0.95 0.30</diffuse>
+            <emissive>0.0 0.55 0.82 0.35</emissive>
+          </material>
+        </visual>
+        <visual name="nfz_south_hangar_ring">
+          <pose>16.0 -16.5 0.010 0 0 0</pose>
+          <cast_shadows>false</cast_shadows>
+          <geometry><cylinder><radius>6.5</radius><length>0.004</length></cylinder></geometry>
+          <material>
+            <ambient>0.0 0.65 0.90 0.30</ambient>
+            <diffuse>0.0 0.72 0.95 0.30</diffuse>
+            <emissive>0.0 0.55 0.82 0.35</emissive>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- 5. Pre-staged Intercept Strike Burst Particle Emitters (z=-5.0, emitting=false) -->
+    <model name="strike_burst_1">
+      <static>true</static>
+      <pose>0 0 -5.0 0 0 0</pose>
+      <link name="link">
+        <particle_emitter name="burst" type="ellipsoid">
+          <emitting>false</emitting>
+          <duration>0.8</duration>
+          <size>0.6 0.6 0.6</size>
+          <particle_size>0.45 0.45 0.45</particle_size>
+          <lifetime>1.2</lifetime>
+          <rate>120</rate>
+          <min_velocity>2.5</min_velocity>
+          <max_velocity>7.0</max_velocity>
+          <scale_rate>1.6</scale_rate>
+          <color_start>1.0 0.72 0.20 1</color_start>
+          <color_end>0.28 0.30 0.34 0.0</color_end>
+          <topic>/fx/strike_burst_1/cmd</topic>
+        </particle_emitter>
+      </link>
+    </model>
+    <model name="strike_burst_2">
+      <static>true</static>
+      <pose>0 0 -5.0 0 0 0</pose>
+      <link name="link">
+        <particle_emitter name="burst" type="ellipsoid">
+          <emitting>false</emitting>
+          <duration>0.8</duration>
+          <size>0.6 0.6 0.6</size>
+          <particle_size>0.45 0.45 0.45</particle_size>
+          <lifetime>1.2</lifetime>
+          <rate>120</rate>
+          <min_velocity>2.5</min_velocity>
+          <max_velocity>7.0</max_velocity>
+          <scale_rate>1.6</scale_rate>
+          <color_start>1.0 0.72 0.20 1</color_start>
+          <color_end>0.28 0.30 0.34 0.0</color_end>
+          <topic>/fx/strike_burst_2/cmd</topic>
+        </particle_emitter>
+      </link>
+    </model>
+    <model name="strike_burst_3">
+      <static>true</static>
+      <pose>0 0 -5.0 0 0 0</pose>
+      <link name="link">
+        <particle_emitter name="burst" type="ellipsoid">
+          <emitting>false</emitting>
+          <duration>0.8</duration>
+          <size>0.6 0.6 0.6</size>
+          <particle_size>0.45 0.45 0.45</particle_size>
+          <lifetime>1.2</lifetime>
+          <rate>120</rate>
+          <min_velocity>2.5</min_velocity>
+          <max_velocity>7.0</max_velocity>
+          <scale_rate>1.6</scale_rate>
+          <color_start>1.0 0.72 0.20 1</color_start>
+          <color_end>0.28 0.30 0.34 0.0</color_end>
+          <topic>/fx/strike_burst_3/cmd</topic>
+        </particle_emitter>
+      </link>
+    </model>
+
+    <!-- 6. Cinema Director Camera Rig (always_on=false: zero Stage-1 headless cost) -->
+    <model name="director_cam">
+      <pose>-10.0 -8.0 5.5 0 0.12 0.35</pose>
+      <static>false</static>
+      <link name="cam_link">
+        <gravity>false</gravity>
+        <inertial><mass>0.01</mass><inertia><ixx>0.001</ixx><iyy>0.001</iyy><izz>0.001</izz></inertia></inertial>
+        <sensor name="director_rgb" type="camera">
+          <camera>
+            <horizontal_fov>1.12</horizontal_fov>
+            <image><width>1920</width><height>1080</height><format>R8G8B8</format></image>
+            <clip><near>0.1</near><far>1200</far></clip>
+          </camera>
+          <always_on>false</always_on>
+          <update_rate>30</update_rate>
+          <visualize>false</visualize>
+          <plugin filename="gz-sim-lens-flare-system" name="gz::sim::systems::LensFlare">
+            <light_name>sunUTC</light_name>
+            <scale>0.65</scale>
+            <color>1.0 0.78 0.45</color>
+            <occlusion_steps>10</occlusion_steps>
+          </plugin>
+        </sensor>
+        <sensor name="director_thermal" type="thermal">
+          <camera>
+            <horizontal_fov>1.047</horizontal_fov>
+            <image><width>640</width><height>480</height><format>L8</format></image>
+            <clip><near>0.1</near><far>800</far></clip>
+          </camera>
+          <always_on>false</always_on>
+          <update_rate>15</update_rate>
+          <visualize>false</visualize>
+          <plugin filename="gz-sim-thermal-sensor-system" name="gz::sim::systems::ThermalSensor">
+            <min_temp>275.0</min_temp>
+            <max_temp>430.0</max_temp>
+            <resolution>0.5</resolution>
+          </plugin>
+        </sensor>
+      </link>
+      <plugin filename="gz-sim-velocity-control-system" name="gz::sim::systems::VelocityControl">
+        <initial_linear>0.0 0.0 0.0</initial_linear>
+        <initial_angular>0.0 0.0 0.0</initial_angular>
+      </plugin>
+    </model>
+
+    <!-- 7. Pre-staged Hostile Target UAVs (outside interceptor corridor, driven via VelocityControl) -->
+    <include>
+      <uri>model://red_target_uav</uri>
+      <name>red_moving_target</name>
+      <pose>20.5 2.5 5.7 0 0 0</pose>
+    </include>
+    <include>
+      <uri>model://amber_target_uav</uri>
+      <name>amber_escort_target</name>
+      <pose>42.0 -1.5 7.2 0 0 0</pose>
+    </include>
+    <include>
+      <uri>model://slate_target_uav</uri>
+      <name>slate_recon_target</name>
+      <pose>64.0 3.0 8.5 0 0 0</pose>
+    </include>
+
+    <spherical_coordinates>
+      <surface_model>EARTH_WGS84</surface_model>
+      <world_frame_orientation>ENU</world_frame_orientation>
+      <latitude_deg>47.397971057728974</latitude_deg>
+      <longitude_deg>8.546163739800146</longitude_deg>
+      <elevation>0</elevation>
+    </spherical_coordinates>
+  </world>
+</sdf>

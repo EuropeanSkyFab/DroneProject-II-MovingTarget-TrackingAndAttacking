@@ -2,18 +2,19 @@
 # 课题二飞控安全、云台伺服、地理围栏与高机动响应全量参数固化（兼容 PX4 v1.17.0 / v1.15.4）
 # 注：在 PX4 commander_params.c 中：
 #   COM_OBL_RC_ACT: 3 = Return mode, 4 = Land mode, 5 = Hold mode
-#   必须设为 4 (Land mode) 与 COM_OF_LOSS_T = 0.5，防止 Offboard 断联后在 Gazebo 漂移爬升。
+#   设为 3 (Return mode) 与 COM_OF_LOSS_T = 0.5：若桥接进程自身崩溃导致 Offboard 断联，由飞控自主执行 RTL 返回起飞点；
+#   RTL_RETURN_ALT = 18.0 高于场地 16.5m 最高障碍物。
 
 # -------------------- 1. 双层失控保护与硬件地理围栏 --------------------
 param set NAV_DLL_ACT 0
-param set COM_OBL_RC_ACT 4
+param set COM_OBL_RC_ACT 3
 param set COM_OF_LOSS_T 0.5
 param set COM_LOW_BAT_ACT 2
 param set GF_ACTION 2
 param set GF_SOURCE 0
 param set GF_MAX_HOR_DIST 150.0
 param set GF_MAX_VER_DIST 45.0
-param set RTL_RETURN_ALT 15.0
+param set RTL_RETURN_ALT 18.0
 param set RTL_DESCEND_ALT 5.0
 param set RTL_LAND_DELAY 0.0
 param set MPC_LAND_SPEED 1.2
