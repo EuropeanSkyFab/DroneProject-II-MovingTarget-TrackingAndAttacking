@@ -157,9 +157,17 @@ class CenterNode(Node):
         self.latest_vision_target = None # 
         self.last_battery_time = 0.0    # 记录电量
         
-        # 用于防止状态机高频切换状态
-        self.vision_hit_count = 0  # 连续看到目标的次数
-        self.vision_miss_count = 0 # 连续丢失目标的次数
+        # ===== 视觉跟飞的"进入确认"（切出仍用下方保鲜期） =====
+        # 只看 latest_vision_target 是否为空是不够的：单帧杂散视觉到达后，
+        # 它会在 2s 内一直非空，于是中枢跟飞 2s → 过期切重捕获 2s → 再来一帧再跟飞，
+        # 形成反复横跳。所以进入方向用「连续帧数」确认：
+        # 必须连续收到 VISION_ENTER_FRAMES 帧（中途断流超过 VISION_FLOW_GAP 就重新计数），
+        # 才认为视觉可信并切到跟飞模式。
+        self.vision_tracking = False         # 当前是否处于"视觉跟飞"模式
+        self.vision_hit_count = 0            # 本轮连续收到的视觉帧数
+        self.VISION_ENTER_FRAMES = 10        # 连续收到多少帧才进入视觉跟飞
+        self.VISION_FLOW_GAP = 0.15          # 超过该间隔没有新帧，视为断流（秒）
+        self.VISION_EXPIRE = 2.0             # 视觉保鲜期：超过该时长判定为丢失（安全门限）
         
         #  物理安全边界配置（按需修改）
         self.MAX_XY_DIST = 1000.0   # 水平最大允许坐标（米），超过则丢弃
@@ -261,6 +269,35 @@ class CenterNode(Node):
         setattr(self, f'last_state_time_{drone_id}', time.time()) 
         
         
+    # 视觉帧统一入口：连续帧计数 + 切入判定（新旧话题共用同一套门限）
+    def _accept_vision_frame(self, stamped_target):
+        now = time.time()
+        # 断流（间隔超过 FLOW_GAP）则从头计数，断续到达的帧不算连续
+        if now - self.last_vision_time > self.VISION_FLOW_GAP:
+            self.vision_hit_count = 1
+        else:
+            self.vision_hit_count += 1
+
+        self.latest_vision_target = stamped_target
+        self.last_vision_time = now
+
+        # 切入判定：连续帧数达标且当前不在跟飞状态
+        if (not self.vision_tracking
+                and self.vision_hit_count >= self.VISION_ENTER_FRAMES):
+            self.vision_tracking = True
+            self.get_logger().info(
+                f"视觉连续 {self.vision_hit_count} 帧稳定，进入跟飞（环绕）模式")
+
+    # 视觉保鲜期检查：超过 VISION_EXPIRE 判定丢失（由定时器调用，因为"没有数据"不会有回调）
+    def _expire_stale_vision(self, now):
+        if (self.latest_vision_target is not None
+                and now - self.last_vision_time > self.VISION_EXPIRE):
+            if self.vision_tracking:
+                self.get_logger().warn("视觉丢失超过 2s，切换到规划重捕获")
+            self.latest_vision_target = None
+            self.vision_tracking = False
+            self.vision_hit_count = 0
+
     # 距离滞回判定：避免避让在边界处反复开关
     def _avoid_should_engage(self, drone_id, other_id, dist):
         """距离滞回：小于 COLLISION_WARN_DIST 开始避让，
@@ -428,8 +465,9 @@ class CenterNode(Node):
             return
 
         
-        self.latest_vision_target = copy.deepcopy(msg)
-        self.last_vision_time = time.time() 
+        # 连续帧计数与切入判定统一由 _accept_vision_frame 处理，
+        # 新旧视觉话题共用同一套门限（否则新话题成为主路径后门限会失效）。
+        self._accept_vision_frame(copy.deepcopy(msg))
 
  
     # 新视觉消息：带 6x6 协方差和测距模式
@@ -474,8 +512,8 @@ class CenterNode(Node):
         # 下游沿用旧 PoseStamped；姿态无意义，给单位 w。
         target.pose.orientation.w = 1.0
 
-        self.latest_vision_target = target
-        self.last_vision_time = time.time()
+        # 走统一入口：连续帧门限对新话题同样生效
+        self._accept_vision_frame(target)
         self.latest_vision_cov_time = time.time()
         self.get_logger().debug(
             f"[视觉cov] 接收 mode={mode:.1f} pos=({position[0]:.1f},{position[1]:.1f},{position[2]:.1f})",
@@ -557,8 +595,7 @@ class CenterNode(Node):
         # 全局数据保鲜期检查
         # 无论当前是什么模式，只要数据断供超时，必须强制清空（防幽灵变量）
         # 视觉数据过期检查
-        if time.time() - self.last_vision_time > 2.0:
-            self.latest_vision_target = None
+        self._expire_stale_vision(time.time())
             
         # 2. 规划保鲜（多机专属，分机独立结算）
         for d_id in self.swarm_config:
@@ -728,13 +765,18 @@ class CenterNode(Node):
 
                         self.get_logger().info(f"{drone_id} 已落地，状态机回到 GROUND")
 
-            # 追踪（极限环环绕 + 切向防撞）
+            # 追踪（视觉跟飞做极限环环绕；视觉丢失则直飞规划重捕获点，不绕圈）
             elif mode == "TRACK":
-                # ★ 核心修改 1：先从字典里拿自己的专属规划点
+                # ★ 先从字典里拿自己的专属规划点
                 my_plan = self.latest_plan_targets.get(drone_id)
-                
-                # 视觉优先（目前视觉是全局共享的），视觉没有就用专属规划
-                target = self.latest_vision_target if self.latest_vision_target is not None else my_plan
+
+                # 跟踪源判定：
+                #   有视觉 → 用视觉点跟飞，并做切向环绕保持安全距离
+                #   无视觉 → 用规划点重捕获，直飞，不做环绕（绕圈会拖慢重新捕获）
+                # 视觉可信度与切入切出由 vision_callback / _expire_stale_vision 维护，
+                # 这里只读结果。
+                using_vision = self.vision_tracking
+                target = self.latest_vision_target if using_vision else my_plan
                 
                 if target is not None and my_state is not None:
                     # 必须深拷贝，防止污染全局/字典变量
@@ -745,8 +787,8 @@ class CenterNode(Node):
                     dy = target.pose.position.y - my_state.pose.pose.position.y
                     horiz_dist = math.sqrt(dx * dx + dy * dy)
 
-                    # 如果距离小于安全距离，触发切向环绕（极限环）
-                    if horiz_dist < self.TRACK_SAFE_DIST and horiz_dist > 0.01:
+                    # 只有跟飞视觉点时才做切向环绕；重捕获阶段直飞规划点
+                    if using_vision and horiz_dist < self.TRACK_SAFE_DIST and horiz_dist > 0.01:
                         # 计算连线单位向量
                         ux = dx / horiz_dist
                         uy = dy / horiz_dist
@@ -763,6 +805,10 @@ class CenterNode(Node):
                         target.pose.position.y += tangent_y * push_force
                         
                         self.get_logger().info(f"{drone_id} 正在环绕目标", throttle_duration_sec=2.0)
+                    elif not using_vision:
+                        self.get_logger().info(
+                            f"{drone_id} 视觉丢失，按规划点重捕获（直飞，不环绕）",
+                            throttle_duration_sec=2.0)
 
                     # 然后再应用友军防撞（防止环绕的时候撞到队友）
                     self.apply_collision_avoidance(drone_id, my_state, target, mode)
@@ -771,7 +817,7 @@ class CenterNode(Node):
                     self.send_single_target(drone_id, target)
                     
                     # 云台锁定原始目标
-                    if self.latest_vision_target is not None:
+                    if using_vision:
                         # 注意这里云台锁定的是视觉的原始坐标，不是被推开的环绕坐标
                         self.publish_gimbal_target(drone_id, self.latest_vision_target, my_state)
 
