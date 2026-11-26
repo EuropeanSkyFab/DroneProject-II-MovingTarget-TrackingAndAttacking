@@ -260,10 +260,11 @@ class Px4BridgeNode(Node):
         self.land_brake_start: Optional[float] = None
         self.last_diag_pub_time: float = 0.0
 
-        # 状态机: GROUND -> ARMING -> AIRBORNE -> LANDING -> GROUND
+        # 状态机: GROUND -> ARMING -> AIRBORNE -> (FAILSAFE_RTL) -> LANDING -> GROUND
         self.flight_phase: str = 'GROUND'
         self.arm_tick_count: int = 0
         self.last_cmd_retry_time: float = 0.0
+        self._terminal_enter_time: float = 0.0
 
         # 局部 NED 真实位置与影子平滑位置
         self.real_n: float = 0.0
@@ -651,8 +652,52 @@ class Px4BridgeNode(Node):
     def _land(self) -> None:
         self._publish_vehicle_command(VehicleCommand.VEHICLE_CMD_NAV_LAND)
 
+    def _rtl(self) -> None:
+        self._publish_vehicle_command(VehicleCommand.VEHICLE_CMD_NAV_RETURN_TO_LAUNCH)
+
     def _disarm(self) -> None:
         self._publish_vehicle_command(VehicleCommand.VEHICLE_CMD_COMPONENT_ARM_DISARM, param1=0.0)
+
+    def _reset_to_ground(self, reset_mode: bool = True) -> None:
+        self.flight_phase = 'GROUND'
+        self.latest_target = None
+        self.prev_tgt_ned = None
+        self.tgt_vel_ned = (0.0, 0.0, 0.0)
+        self.prev_vel_cmd_ned = (0.0, 0.0, 0.0)
+        self.prev_acc_cmd_ned = (0.0, 0.0, 0.0)
+        self.land_brake_start = None
+        self.arm_tick_count = 0
+        self.last_heartbeat_time = 0.0
+        self._terminal_enter_time = 0.0
+        if reset_mode:
+            self._publish_vehicle_command(
+                VehicleCommand.VEHICLE_CMD_DO_SET_MODE, param1=1.0, param2=4.0, param3=3.0
+            )
+
+    def _step_terminal_phase(
+        self,
+        now: float,
+        valid_nav_states: tuple,
+        retry_cmd,
+        done_msg: str,
+        min_disarm_wait_s: float = 0.0,
+    ) -> None:
+        """Monitor PX4 RTL/Land completion, assist disarm after touchdown, and reset to GROUND."""
+        if self.vehicle_status.arming_state == VehicleStatus.ARMING_STATE_DISARMED:
+            self._reset_to_ground(reset_mode=True)
+            self.get_logger().info(f'[{self.drone_id}] {done_msg}')
+            return
+
+        if now - self.last_cmd_retry_time > 1.0:
+            self.last_cmd_retry_time = now
+            speed = math.sqrt(
+                self.local_pos.vx ** 2 + self.local_pos.vy ** 2 + self.local_pos.vz ** 2
+            )
+            disarm_armed_ok = (now - self._terminal_enter_time) >= min_disarm_wait_s
+            if disarm_armed_ok and self.real_d > self.land_d_threshold and speed < 0.25:
+                self._disarm()
+            elif self.vehicle_status.nav_state not in valid_nav_states:
+                retry_cmd()
 
     def _select_max_speed(self) -> float:
         if self.current_action == 'ATTACK':
@@ -675,19 +720,55 @@ class Px4BridgeNode(Node):
         self._publish_fc_diagnostics(now)
         self._update_px4_gimbal(now)
 
-        # 1. 心跳看门狗：中枢失联则切 Land 降落
+        # 1. 心跳看门狗：地面预流断联退回待命，升空后失联触发 PX4 原生 RTL 返回起飞点
         if (
             self.last_heartbeat_time > 0.0
             and (now - self.last_heartbeat_time > self.heartbeat_timeout)
             and self.flight_phase in ('ARMING', 'AIRBORNE')
         ):
+            on_ground_prelaunch = (
+                self.flight_phase == 'ARMING'
+                and (
+                    self.vehicle_status.arming_state == VehicleStatus.ARMING_STATE_DISARMED
+                    or self.real_d > -0.35
+                )
+            )
+            if on_ground_prelaunch:
+                self.get_logger().warn(
+                    f'[{self.drone_id}] 地面预流期心跳失联超过 {self.heartbeat_timeout:.1f}s，中止起飞退回 GROUND',
+                    throttle_duration_sec=1.0,
+                )
+                if self.vehicle_status.arming_state != VehicleStatus.ARMING_STATE_DISARMED:
+                    self._disarm()
+                self._reset_to_ground(reset_mode=False)
+                return
+
             self.get_logger().error(
-                f'[{self.drone_id}] 中枢心跳失联超过 {self.heartbeat_timeout:.1f}s，触发强制降落！',
+                f'[{self.drone_id}] 中枢心跳失联超过 {self.heartbeat_timeout:.1f}s，触发失控返航(RTL)返回起飞点！',
                 throttle_duration_sec=1.0,
             )
-            self.flight_phase = 'LANDING'
+            self.flight_phase = 'FAILSAFE_RTL'
             self.latest_target = None
-            self._land()
+            self.prev_tgt_ned = None
+            self.tgt_vel_ned = (0.0, 0.0, 0.0)
+            self.land_brake_start = None
+            self.last_cmd_retry_time = now
+            self._terminal_enter_time = now
+            self._rtl()
+            return
+
+        # 2. 失控返航监控态（交由 PX4 Navigator 自主返航并降落，期间不再下发 Offboard 设定点）
+        if self.flight_phase == 'FAILSAFE_RTL':
+            self._step_terminal_phase(
+                now,
+                (
+                    VehicleStatus.NAVIGATION_STATE_AUTO_RTL,
+                    VehicleStatus.NAVIGATION_STATE_AUTO_LAND,
+                ),
+                self._rtl,
+                '失控返航已触地并 disarm，回到 GROUND 待命',
+                min_disarm_wait_s=4.0,
+            )
             return
 
         # 2. 目标保鲜期检查：超 2 秒无新坐标则清空旧目标原地悬停
@@ -872,29 +953,12 @@ class Px4BridgeNode(Node):
 
         # 6. 降落与自动上锁态
         if self.flight_phase == 'LANDING':
-            if self.vehicle_status.arming_state == VehicleStatus.ARMING_STATE_DISARMED:
-                self.flight_phase = 'GROUND'
-                self.latest_target = None
-                self.prev_tgt_ned = None
-                self.tgt_vel_ned = (0.0, 0.0, 0.0)
-                self.prev_vel_cmd_ned = (0.0, 0.0, 0.0)
-                self.prev_acc_cmd_ned = (0.0, 0.0, 0.0)
-                self.last_heartbeat_time = 0.0
-                self._publish_vehicle_command(
-                    VehicleCommand.VEHICLE_CMD_DO_SET_MODE, param1=1.0, param2=4.0, param3=3.0
-                )
-                self.get_logger().info(f'[{self.drone_id}] 已安全触地并 disarm，回到 GROUND 待命')
-                return
-
-            if now - self.last_cmd_retry_time > 1.0:
-                self.last_cmd_retry_time = now
-                speed = math.sqrt(
-                    self.local_pos.vx ** 2 + self.local_pos.vy ** 2 + self.local_pos.vz ** 2
-                )
-                if self.real_d > self.land_d_threshold and speed < 0.25:
-                    self._disarm()
-                elif self.vehicle_status.nav_state != VehicleStatus.NAVIGATION_STATE_AUTO_LAND:
-                    self._land()
+            self._step_terminal_phase(
+                now,
+                (VehicleStatus.NAVIGATION_STATE_AUTO_LAND,),
+                self._land,
+                '已安全触地并 disarm，回到 GROUND 待命',
+            )
 
 
 def main(args=None) -> None:
