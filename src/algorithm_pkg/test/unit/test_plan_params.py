@@ -203,3 +203,27 @@ def test_invalid_params_raise_value_error(kwargs, measured):
         PlanParams(**kwargs)
 
     measured(f"kwargs={kwargs} -> ValueError")
+
+
+def test_max_step_for_action_uses_override_or_fallback(measured):
+    """场景：同时配置兜底步长和三个动作的专用步长。
+
+    预期：TRACK/INTERCEPT/ATTACK 返回专用值；HOVER 和未知动作回落到兜底值。
+    """
+    params = PlanParams(
+        max_step=0.30,
+        max_step_track=0.14,
+        max_step_intercept=0.38,
+        max_step_attack=0.62,
+    )
+    assert params.max_step_for("TRACK") == pytest.approx(0.14)
+    assert params.max_step_for("intercept") == pytest.approx(0.38)
+    assert params.max_step_for(" Attack ") == pytest.approx(0.62)
+    assert params.max_step_for("HOVER") == pytest.approx(0.30)
+    assert params.max_step_for("UNKNOWN") == pytest.approx(0.30)
+
+    fallback = PlanParams(max_step=0.74)
+    assert fallback.max_step_for("TRACK") == pytest.approx(0.74)
+    assert fallback.max_step_for("ATTACK") == pytest.approx(0.74)
+
+    measured("TRACK 0.14 / INTERCEPT 0.38 / ATTACK 0.62 / 其他回落到 max_step")

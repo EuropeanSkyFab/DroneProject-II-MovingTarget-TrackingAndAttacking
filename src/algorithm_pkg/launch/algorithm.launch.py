@@ -22,22 +22,22 @@ def generate_launch_description():
                 # 规划定时器频率；中枢消费是 20Hz，两者不要差太多。
                 {'publish_rate_hz': 20.0},
 
-                # ! P5 收口口径（2026-11-20）：按本机 x500_down_cam 实测能力配置。
+                # ! 本机实测口径：按 x500_down_cam 实测能力配置。
                 # ! 取值 14.69 / 9.79 / 172.4 来自理论注入后的复测；最终参数复测峰值
                 # ! 15.19 / 10.01 / 174.2，这里取偏保守的值。
                 # ! 学长理论值 23.59 / 10.82 / 185.2 只作参考，本仿真不可达，不要当验收目标。
-                # ! 改动前先看 文档/算法测试基本方法.md 第 8 章。
+                # ! 改动前先看 docs/算法测试基本方法.md 第 8 章。
                 {'v_max': 4.50},            # V_cruise：理论 4.50，实测 5.49，保守取 4.50
                 {'v_max_intercept': 7.60},  # INTERCEPT 档：桥接 0.38×20 = 7.60
-                {'v_max_attack': 14.80},    # ATTACK 档：P5 实测 V_max≈14.8（理论 23.59 不可达）
-                {'a_max': 9.79},            # P5 实测 a_max
-                {'yaw_rate_max': 3.009324816594666},  # 172.4 deg/s，P5 实测
+                {'v_max_attack': 12.40},    # ATTACK 档：与桥接上限一致；实测约 6.2 m/s
+                {'a_max': 9.79},            # 本机实测 a_max
+                {'yaw_rate_max': 3.009324816594666},  # 172.4 deg/s，本机实测
                 {'t_go_max': 8.0},
 
                 # P1 目标估计窗口；视觉 10Hz 时 1s 内通常有 5~10 帧。
                 {'max_age': 1.0},
-                # P2 发点门限：超过 0.5s 的预测不再用于发点。
-                {'max_pred_age': 0.5},
+                # P2 发点门限：0.5 s 边界在实测里会抖进 L1；取 0.45 s 留余量。
+                {'max_pred_age': 0.45},
                 {'max_speed': 15.0},
 
                 # 目标过近不输出点；INTERCEPT 不可达时尾随距离。
@@ -50,12 +50,22 @@ def generate_launch_description():
                 {'max_alt': 50.0},
                 {'max_xy': 1000.0},
 
-                # ! 单帧最大跳变。P5 收口取 0.74 = 14.8 m/s × 0.05 s（ATTACK 档）；
-                # ! 桥接仍按动作分三档 0.225/0.38/0.74，算法侧单值只做上限。
-                # ! 学长理论 1.1795（23.59 m/s）本仿真不可达，仅注释保留。
-                {'max_step': 0.74},
+                # ! 单帧最大跳变按动作分档，与桥接档位一致：
+                # ! TRACK 0.14（2.8 m/s×0.05）、INTERCEPT 0.38、ATTACK 0.62。
+                # ! max_step 只作兜底；参数来源见 README 参数表。
+                {'max_step': 0.30},
+                {'max_step_track': 0.14},
+                {'max_step_intercept': 0.38},
+                {'max_step_attack': 0.62},
                 {'target_timeout': 0.5},
                 {'history_sec': 3.0},
+
+                # 视觉兼容：带协方差话题优先，无协方差话题在超时后回退。
+                {'vision_use_covariance': True},
+                {'vision_cov_topic': '/vision/target_pose_cov'},
+                {'vision_cov_max_var': 100.0},   # 米²；大于它视为位置不可信
+                {'vision_cov_min_z': 0.0},       # 地面目标允许 z=0
+                {'vision_legacy_timeout': 0.5},  # 带协方差话题停多久后回退
 
                 # 没收到 /strategy/cmd 前的默认模式；HOVER 最安全。
                 {'default_action': 'HOVER'},

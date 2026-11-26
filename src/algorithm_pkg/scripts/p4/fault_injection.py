@@ -1,4 +1,4 @@
-"""P4 失效注入探针：只跑 algorithm_node，注入 7 类异常，读日志断言降级。
+"""失效注入探针：只跑 algorithm_node，注入 7 类异常，读日志断言降级。
 
 场景（本机时间轴，20Hz）：
   0.5  TRACK
@@ -121,7 +121,7 @@ def main():
     while node.now() < END_AT:
         rclpy.spin_once(node, timeout_sec=0.05)
 
-    log = open(os.environ.get("P4_LOG", "algo.log"), "r", encoding="utf-8", errors="replace").read()
+    log = open(os.environ.get("INTEGRATION_LOG", "algo.log"), "r", encoding="utf-8", errors="replace").read()
     checks = []
 
     def add(name, ok, detail):

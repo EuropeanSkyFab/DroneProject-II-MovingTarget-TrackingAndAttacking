@@ -11,14 +11,14 @@
 python3 -m algorithm_pkg.scripts.p5.scenario_suite --list
 
 # 跑一个场景（假定整栈已启动）
-python3 .../scenario_suite.py --run intercept_cross_4 --out /root/ros2_ws/.p5/final_run/p6
+python3 .../scenario_suite.py --run intercept_cross_4 --out /root/ros2_ws/.p5/evidence/scenarios
 
 # 一键编排：每个场景自己 start / stop 整栈
 python3 .../scenario_suite.py --orchestrate --run all
 ```
 
 约定：
-- 目标只从 ``/vision/target_pose`` 注入，不碰真实视觉链路（P5-01 未交付）。
+- 目标只从 ``/vision/target_pose`` 注入，不碰真实视觉链路（camera relay 未交付）。
 - 每个场景跑完自动发 ``HOVER``，再写 CSV。
 - 不生成 3D 图；观察用 CSV 与终端汇总表。
 """
@@ -49,8 +49,8 @@ from algorithm_pkg.scenario_defs import (
     verdict,
 )
 
-DEFAULT_OUT = os.environ.get("P6_OUT_DIR", "/root/ros2_ws/.p5/final_run/p6")
-STACK_SCRIPT = os.environ.get("P5_STACK", "/root/ros2_ws/.p5/p5_stack.sh")
+DEFAULT_OUT = os.environ.get("SCENARIO_OUT_DIR", "/root/ros2_ws/.p5/evidence/scenarios")
+STACK_SCRIPT = os.environ.get("STACK_SCRIPT_ENV", "/root/ros2_ws/.p5/p5_stack.sh")
 
 # 起飞与切模式的边界。
 TAKEOFF_AT = 0.5
@@ -307,7 +307,7 @@ def _stack(action: str) -> bool:
 
 
 def main(argv: Optional[List[str]] = None) -> int:
-    parser = argparse.ArgumentParser(description="P5/P6 统一场景执行器")
+    parser = argparse.ArgumentParser(description="统一场景执行器")
     parser.add_argument("--list", action="store_true", help="列出全部场景")
     parser.add_argument("--run", default="", help="场景 id，或 all，或逗号分隔")
     parser.add_argument("--out", default=DEFAULT_OUT, help="CSV 输出目录")

@@ -1,28 +1,29 @@
 """适配层纯逻辑：把 ROS 回调里确定的事实变成 P3 的输入与发布决策。
 
 本模块不 import ``rclpy``，也不自己读时钟：所有 ``now`` 都由节点在
-发布时刻取 ROS clock 后传入。这样 ``test/test_node_adapter.py`` 可以在
+发布时刻取 ROS clock 后传入。这样 ``test/unit/test_node_adapter.py`` 可以在
 不启动 ROS 的情况下验证：
 
 - 目标/己方时间戳的零、未来、倒退帧如何被拦住，且不污染降级计数；
 - 每架飞机复用同一个 ``DegradeFSM``，并把 ``prev_result`` 串联起来；
 - 哪些 ``PlanResult`` 应该发布接口 C，payload 的字段与 stamp 语义；
-- ATTACK 无解时补“当前位置保持点”（P2/P3 文档既定兜底）。
+- ATTACK 无解时补“当前位置保持点”（P2/P3 文档既定兜底）；
+- L3 且己方状态仍有效时补固定保持点，覆盖中枢保留的上一帧点。
 
 适配层只做搬运：不在这里做“该不该裁剪/该不该降级”的判断，那些都在
 P1/P2/P3 的纯函数里。
 """
 
-# ! 裁决 2/3 的实现边界（P4，2026-11-18，实验数据见 src/algorithm_pkg/README.md
-# ! 的“外部系统限制与已知问题”）：
-# ! 1) 接口 C 的 action 只是标签：中枢 plan_callback 不解析它，模式只由
-# !    /strategy/cmd 驱动。仍按 7 个枚举发，不假设它能改变中枢限幅。
-# ! 2) L3/no_plan 时本模块不发布接口 C，也不伪造“清空”消息。中枢会保留
-# !    上一帧点最多 2.0s（2026-11-18 实测 1.98s），盲飞距离由 max_step
-# !    限制（默认 0.30 m/帧，ATTACK 场景实测盲飞 0.00m）。
-# ! 3) max_step 默认 0.30 = 宪章 V_max 6.0 m/s × 0.05s。P4 曾按飞控步长
-# !    用 0.62（对应 12.4 m/s），与《内部分工细节》的 V_max 冲突，
-# !    2026-11-19 回退。若宪章更新，要同步改 launch、节点默认值和测试断言。
+# ! 实现边界（数据见 src/algorithm_pkg/README.md 的“已知限制与未决项”）：
+# ! 1) 接口 C 的 action 只是标签：中枢只在 HOVER 时用它筛规划点，
+# !    模式仍由 /strategy/cmd 驱动，限幅也不看 action。仍按 7 个枚举发。
+# ! 2) L3/no_plan 时，若己方状态仍有效且异常来自目标，本模块补固定
+# !    保持点（第一次进 L3 时的己方位置），覆盖中枢保留的上一帧点；己方
+# !    状态失效时不发布，也不伪造“清空”消息。中枢仍会保留上一帧点
+# !    最多 2.0s（实测 1.98s）。
+# ! 3) max_step 默认 0.30 = 宪章 V_max 6.0 m/s × 0.05s。飞控步长 0.62
+# !    对应 12.4 m/s，与《内部分工细节》的 V_max 冲突，因此默认取 0.30。
+# !    若宪章更新，要同步改 launch、节点默认值和测试断言。
 
 from __future__ import annotations
 
@@ -40,8 +41,10 @@ from algorithm_pkg.algorithm_core import (
 from algorithm_pkg.degrade_fsm import DegradeFSM
 from algorithm_pkg.degrade_policy import plan_with_degrade
 from algorithm_pkg.plan_params import PlanParams
+from algorithm_pkg.plan_policy import hover_in_envelope
 from algorithm_pkg.plan_types import PLAN_ACTIONS, PlanResult
 from algorithm_pkg.safety_guard import apply_safety_guard
+from algorithm_pkg.validators import ANOMALY_INVALID, ANOMALY_STALE
 
 # ROS 时间戳比较容差：秒。与 P3 validators 的 1e-6 保持一致。
 TIME_EPS = 1e-6
@@ -49,6 +52,13 @@ TIME_EPS = 1e-6
 # ATTACK 在 NORMAL 级别解不出点时，适配层补的保持点原因。
 # L1/L2 的保持点由 P3 自己产生，reason 以 hold_ 开头。
 ATTACK_HOLD_REASON = "hold_attack_no_solution"
+
+# L3 且己方状态新鲜时，适配层补的“当前位置保持点”原因前缀。
+# 后缀取异常分类（invalid/stale），日志能区分目标坏在哪一类。
+NO_PLAN_HOLD_PREFIX = "hold_no_plan_"
+
+# L2 固定锚点：进入 HOLDING 的第一帧捕获己方位置，之后不再跟目标。
+L2_HOLD_REASON = "hold_fixed_anchor"
 
 STAMP_ZERO = "stamp_zero"
 STAMP_FUTURE = "stamp_future"
@@ -211,11 +221,17 @@ class DroneRuntime:
             滞回、恢复计数和 last_valid_point 都会丢。
         prev_result: 上一帧的 ``PlanResult``，供 L2 保持点和护栏跳变使用。
         last_level: 上一帧的级别字符串，用于“级别变化”日志。
+        hover_anchor: HOVER 固定锚点，米；切出 HOVER 时清空。
+        l2_anchor: L2 固定锚点，米；进入 HOLDING 时捕获。
+        l3_anchor: L3 固定锚点，米；第一次补保持点时捕获，恢复后清空。
     """
 
     fsm: DegradeFSM
     prev_result: Optional[PlanResult] = None
     last_level: str = "NORMAL"
+    hover_anchor: Optional[Vec3] = None
+    l2_anchor: Optional[Vec3] = None
+    l3_anchor: Optional[Vec3] = None
 
     @classmethod
     def create(cls, params: PlanParams) -> "DroneRuntime":
@@ -276,6 +292,124 @@ def attack_hold(
     )
 
 
+def l2_hold(
+    runtime: DroneRuntime,
+    result: PlanResult,
+    own: Optional[Vec3],
+    now: float,
+    params: PlanParams,
+) -> Optional[PlanResult]:
+    """L2 用进入 HOLDING 时捕获的己方位置作固定锚点。
+
+    P3 默认保持上一有效目标点，可能是目标前方的拦截点。目标丢失后继续
+    飞那个点，飞机不会停在原地。适配层在 L2 第一帧捕获己方位置，之后
+    每帧发同一个点；中枢 main 已改为 HOVER 优先读规划点。
+
+    Args:
+        runtime: 该机运行时；持有 L2 锚点。
+        result: P3 返回的 HOLDING 结果。
+        own: 己方 ENU 位置，米。
+        now: 当前时刻，秒。
+        params: 安全护栏参数。
+
+    Returns:
+        带固定锚点的结果；护栏拒绝时返回 ``None``，沿用 P3 的保持点。
+    """
+    anchor = runtime.l2_anchor
+    if anchor is None:
+        if own is None:
+            return None
+        anchor = own
+
+    guard = apply_safety_guard(
+        anchor,
+        None,
+        result.action,
+        params,
+        now,
+        runtime.fsm.last_valid_stamp,
+        target=None,
+    )
+    if not guard.accepted or guard.point is None:
+        return None
+
+    if runtime.l2_anchor is None:
+        runtime.l2_anchor = guard.point
+    runtime.fsm.remember_point(guard.point, guard.stamp)
+    return replace(
+        result,
+        point=guard.point,
+        reachable=False,
+        reason=L2_HOLD_REASON,
+        clipped=guard.clipped,
+        guard_notes=guard.notes,
+        output_stamp=guard.stamp,
+    )
+
+
+def no_plan_hold(
+    runtime: DroneRuntime,
+    result: PlanResult,
+    own: Vec3,
+    now: float,
+    params: PlanParams,
+) -> Optional[PlanResult]:
+    """L3 且己方状态仍有效时，补固定保持点。
+
+    中枢收不到新规划点时会保留上一帧点最多 2.0s。L3 若由目标非法触发，
+    己方位置仍然可信，此时发固定点可以覆盖上一帧攻击/拦截点，让飞机停在
+    第一次进 L3 的位置等恢复。己方状态失效时不能补，否则会用过期位置
+    继续下指令。
+
+    Args:
+        runtime: 该机运行时；读取 FSM 的己方状态和上一输出点。
+        result: P3 返回的 L3 结果；沿用它的 action、level 和 anomaly。
+        own: 己方 ENU 位置，米。
+        now: 当前时刻，秒。
+        params: 安全护栏参数。
+
+    Returns:
+        可发布的保持结果；己方状态失效、异常不是目标问题，或护栏拒绝
+        时返回 ``None``。返回值的 ``level`` 仍是 ``NO_PLAN``，表示输入
+        仍然异常；是否发点看 ``point``。
+    """
+    ego_status = runtime.fsm.last_ego_status
+    if ego_status is None or not ego_status.is_fresh:
+        runtime.l3_anchor = None
+        return None
+    if result.anomaly not in (ANOMALY_INVALID, ANOMALY_STALE):
+        return None
+
+    anchor = runtime.l3_anchor
+    if anchor is None:
+        anchor = own
+
+    guard = apply_safety_guard(
+        anchor,
+        None,
+        result.action,
+        params,
+        now,
+        runtime.fsm.last_valid_stamp,
+        target=None,
+    )
+    if not guard.accepted or guard.point is None:
+        return None
+
+    if runtime.l3_anchor is None:
+        runtime.l3_anchor = guard.point
+    runtime.fsm.remember_point(guard.point, guard.stamp)
+    return replace(
+        result,
+        point=guard.point,
+        reachable=False,
+        reason=f"{NO_PLAN_HOLD_PREFIX}{str(result.anomaly).lower()}",
+        clipped=guard.clipped,
+        guard_notes=guard.notes,
+        output_stamp=guard.stamp,
+    )
+
+
 def plan_drone(
     runtime: DroneRuntime,
     action: object,
@@ -303,9 +437,40 @@ def plan_drone(
     Returns:
         ``PlanResult``；``point is None`` 时本帧不发布。
     """
+    action_name = normalize_action(action)
+
+    # HOVER 的锚点只用当前合法位置捕获；己方位置无效时本帧不发点，
+    # 锚点保留，等状态恢复后继续发同一个点。
+    plan_own = own
+    if action_name == "HOVER":
+        # HOVER 锚点的高度按 3 m 下限 / 50 m 上限收边：飞机短暂低于 3 m
+        # 时也捕获一个固定水平点，不能因为 z 越界就退回“跟着自己走”。
+        anchor_point = None
+        if own is not None and all(isfinite(value) for value in own):
+            if abs(own[0]) <= params.max_xy and abs(own[1]) <= params.max_xy:
+                anchor_point = (
+                    own[0],
+                    own[1],
+                    max(params.min_alt, min(params.max_alt, own[2])),
+                )
+        if (
+            runtime.hover_anchor is None
+            and anchor_point is not None
+            and hover_in_envelope(anchor_point, params)
+        ):
+            runtime.hover_anchor = anchor_point
+        if (
+            runtime.hover_anchor is not None
+            and own is not None
+            and hover_in_envelope(anchor_point, params)
+        ):
+            plan_own = runtime.hover_anchor
+    else:
+        runtime.hover_anchor = None
+
     result = plan_with_degrade(
         action,
-        own,
+        plan_own,
         target,
         runtime.fsm,
         params,
@@ -315,17 +480,39 @@ def plan_drone(
         ego_velocity=ego_velocity,
     )
 
+    # ! L2 的固定锚点在进入 HOLDING 的第一帧捕获；目标恢复后清空。
+    if result.level == "HOLDING":
+        held = l2_hold(runtime, result, own, now, params)
+        if held is not None:
+            result = held
+    else:
+        runtime.l2_anchor = None
+
     # ! ATTACK 的 NORMAL 无解需要适配层补保持点；L1/L2 已由 P3 补过，
     # ! 不能重复补，否则会把 P3 的 hold_* 原因覆盖掉。
     if (
         result.point is None
-        and normalize_action(action) == "ATTACK"
+        and action_name == "ATTACK"
         and own is not None
         and result.level != "NO_PLAN"
     ):
         held = attack_hold(runtime, result, own, now, params)
         if held is not None:
             result = held
+
+    # ! L3 若只是目标坏了、己方状态仍有效，补固定保持点，覆盖中枢
+    # ! 保留的上一帧攻击点。己方也失效时不补，避免拿过期位置继续下指令。
+    if (
+        result.point is None
+        and result.level == "NO_PLAN"
+        and result.action in PLAN_ACTIONS
+        and own is not None
+    ):
+        held = no_plan_hold(runtime, result, own, now, params)
+        if held is not None:
+            result = held
+    elif result.level != "NO_PLAN":
+        runtime.l3_anchor = None
 
     result = _attach_source_stamp(
         result, action, target, ego_stamp, runtime.prev_result
@@ -347,8 +534,9 @@ def _attach_source_stamp(
 
     - 正常跟踪/拦截/攻击：用目标采样的 ``stamp``；
     - L1 外推：仍用参与外推的最新目标采样 ``stamp``；
-    - L2 保持 / L1 几何回退：沿用上一有效点的 ``source_stamp``；
-      保持点是己方当前位置时用己方状态时刻；
+    - L2 固定点：用己方状态时刻；
+    - L1 几何回退：沿用上一有效点的 ``source_stamp``；
+    - L3 固定点：用己方状态时刻；
     - HOVER / ATTACK 无解保持点：用己方状态时刻。
 
     没有可用来源时保持 ``None``，由 ``payload`` 回落到发布时刻。
@@ -361,7 +549,12 @@ def _attach_source_stamp(
     source: Optional[float] = None
 
     hold_reason = reason.startswith("hold_") or result.level == "HOLDING"
-    if reason == ATTACK_HOLD_REASON:
+    l3_hold_reason = reason.startswith(NO_PLAN_HOLD_PREFIX)
+    if reason in (ATTACK_HOLD_REASON, L2_HOLD_REASON):
+        source = ego_stamp
+    elif l3_hold_reason:
+        # L3 固定点是己方位置，stamp 必须用当前己方状态时刻，
+        # 不能沿用上一帧目标点，否则中枢会按数据延迟把它丢掉。
         source = ego_stamp
     elif hold_reason:
         if reason.startswith("hold_current_ego"):
@@ -391,7 +584,7 @@ def payload(drone_id: str, now: float, result: PlanResult) -> dict:
     """把 ``PlanResult`` 变成接口 C 的 JSON 字典。
 
     ``stamp`` 优先用 ``result.source_stamp``（规范第 5 节要求的源头
-    时间戳）；结果没有来源时刻时回落到发布时刻 ``now``，兼容旧调用。
+    时间戳）；结果没有来源时刻时回落到发布时刻 ``now``，兼容直接调用。
 
     Args:
         drone_id: 例如 ``"drone_1"``。

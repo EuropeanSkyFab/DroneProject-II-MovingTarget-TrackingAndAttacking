@@ -270,18 +270,21 @@ class DegradeFSM:
             if self.last_valid_stamp is None or stamp > self.last_valid_stamp:
                 self.last_valid_stamp = stamp
 
-    def recovery_step_limit(self) -> Optional[float]:
+    def recovery_step_limit(self, action: Optional[str] = None) -> Optional[float]:
         """返回当前帧应使用的 ``max_step``。
 
-        非恢复期直接返回 ``params.max_step``；恢复期第一帧收紧到
-        ``max_step_recover``，之后按 ``n_recover_step`` 线性放开到
-        ``params.max_step``。若 ``params.max_step`` 为 None（默认不限制），
-        则只在第一帧收紧，之后放开。
+        非恢复期直接返回该动作的 ``max_step``；恢复期第一帧收紧到
+        ``max_step_recover``，之后按 ``n_recover_step`` 线性放开到该动作的
+        ``max_step``。传 ``action`` 时用按动作分档的值；不传时用兜底值。
 
         Returns:
             本帧的跳变上限；``None`` 表示不限制。
         """
-        max_step = self.params.max_step
+        max_step = (
+            self.params.max_step_for(action)
+            if action is not None
+            else self.params.max_step
+        )
         max_step_recover = self.params.max_step_recover
         if not self._recovering or max_step_recover is None:
             return max_step

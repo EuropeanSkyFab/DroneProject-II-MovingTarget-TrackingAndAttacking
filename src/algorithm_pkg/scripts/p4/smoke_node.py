@@ -1,4 +1,4 @@
-"""P4 单节点冒烟：假 state/视觉/指令，观察 /planning/target_pose。
+"""单节点冒烟：假 state/视觉/指令，观察 /planning/target_pose。
 
 场景：TAKEOFF -> TRACK -> ATTACK（目标 20m/s 远离）-> 非法指令 -> RESUME_PATROL。
 预期：TRACK 发预测点；ATTACK 无解发己方保持点；非法指令被忽略；RESUME 后停发。
@@ -155,7 +155,7 @@ def main() -> int:
         )
     )
 
-    print("=== P4 单节点冒烟 ===")
+    print("=== 单节点冒烟 ===")
     failed = 0
     for name, ok, evidence in checks:
         print(f"[{'PASS' if ok else 'FAIL'}] {name}: {evidence}")

@@ -23,7 +23,7 @@ P2 回答“这个动作这一帧该发什么点”；P3 回答“输入已经�
 
 - 中枢对 ``/planning/target_pose`` 没有显式 no_plan 消息语义，收到不到
   新点时会保留上一帧最多 2 秒；P3 只能把 no_plan/hold 语义表达清楚，
-  由 P4 的适配层决定是否补发保持点。
+  由适配层决定是否补发保持点。
 - E/F 同名 topic 自回灌会影响己方状态新鲜度判断；P3 在 validators 里
   记录风险，不在这里修。
 """
@@ -553,7 +553,7 @@ def _plan_normal(
         _last_published_stamp(fsm, prev_result),
         target=target,
         recovering=False,
-        step_limit=fsm.recovery_step_limit(),
+        step_limit=fsm.recovery_step_limit(action),
     )
     return _guard_and_wrap(
         result,
@@ -618,7 +618,7 @@ def _plan_extrapolating(
         _last_published_stamp(fsm, prev_result),
         target=snapshot,
         recovering=False,
-        step_limit=fsm.recovery_step_limit(),
+        step_limit=fsm.recovery_step_limit(action),
     )
     return _guard_and_wrap(
         result,

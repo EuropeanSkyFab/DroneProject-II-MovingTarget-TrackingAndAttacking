@@ -362,3 +362,31 @@ def test_non_finite_now_is_rejected(measured):
     assert result.rejected_reason == "guard_stamp_non_finite"
 
     measured(f"reason={result.rejected_reason}")
+
+
+def test_step_limit_uses_action_specific_value(measured):
+    """场景：TRACK/ATTACK 配置不同的单帧位移上限。
+
+    预期：同一条从 (0,0,10) 到 (10,0,10) 的目标点，TRACK 最多走 0.14 m，
+    ATTACK 最多走 0.62 m，不受兜底 1.0 m 影响。
+    """
+    params = PlanParams(
+        max_step=1.0,
+        max_step_track=0.14,
+        max_step_attack=0.62,
+    )
+    prev = (0.0, 0.0, 10.0)
+    goal = (10.0, 0.0, 10.0)
+
+    track = apply_safety_guard(goal, prev, "TRACK", params, now=1.0)
+    attack = apply_safety_guard(goal, prev, "ATTACK", params, now=1.0)
+
+    assert track.point is not None
+    assert attack.point is not None
+    assert math.dist(track.point, prev) == pytest.approx(0.14, abs=1e-9)
+    assert math.dist(attack.point, prev) == pytest.approx(0.62, abs=1e-9)
+
+    measured(
+        f"TRACK {math.dist(track.point, prev):.3f} m，"
+        f"ATTACK {math.dist(attack.point, prev):.3f} m"
+    )

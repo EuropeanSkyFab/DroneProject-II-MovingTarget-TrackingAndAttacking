@@ -1,7 +1,7 @@
 """情景 1～7 的单点行为测试：从公开入口跑完整数据流，每个用例出图。
 
-多帧降级测试在 ``test/sim/test_multiframe_degrade.py``；情景 8～10 按
-2026-11-22 决定不做单点。
+多帧降级测试在 ``test/sim/test_multiframe_degrade.py``；情景 8～10
+不做单点。
 
 每个用例对应一个情景，只断言业务结果（发不发点、点的位置、reason、
 级别），时间线通过 ``measured()`` 打到终端。与单元测试的分工：
@@ -9,7 +9,7 @@
 - 单元测试验证单个函数的边界；
 - 本文件验证“连续若干帧、按生产参数”时，整条链路是否还满足约定。
 
-参数取 launch 的 P5 收口值，不是 ``PlanParams()`` 的宪章兜底值。
+参数取 launch 的运行值，不是 ``PlanParams()`` 的宪章兜底值。
 """
 
 from math import hypot, radians
@@ -26,9 +26,9 @@ from algorithm_pkg.adapter_core import (
 from algorithm_pkg.algorithm_core import TargetSample, predict_target
 from algorithm_pkg.plan_params import PlanParams
 
-# launch/algorithm.launch.py 的 P5 收口值：
+# launch/algorithm.launch.py 的 运行值：
 # 4.50 / 7.60 / 14.80 m/s、9.79 m/s²、172.4°/s、0.74 m/帧。
-P5_PARAMS = PlanParams(
+BASELINE_PARAMS = PlanParams(
     v_max=4.50,
     v_max_intercept=7.60,
     v_max_attack=14.80,
@@ -45,18 +45,26 @@ def _fmt(point):
     return f"({point[0]:.2f},{point[1]:.2f},{point[2]:.2f})"
 
 
-def test_scenario1_hover_without_target_publishes_own_position(measured, scenario_chart):
-    """场景：目标从未出现，drone_1 在 (10, 20, 5) m 悬停，指令 HOVER，20 Hz 连跑 5 帧。
+def test_scenario1_hover_holds_entry_anchor(measured, scenario_chart):
+    """场景：目标从未出现，drone_1 第 1 帧在 (10, 20, 5) m，之后每帧向东漂 2 m；指令 HOVER。
 
-    预期：5 帧都发点，点就是己方当前位置，reason=hover_hold，级别一直是
-    NORMAL；目标缺失不进入降级状态机，也不改发目标点或保持点。
+    预期：第 1 帧锚点为 (10, 20, 5)；之后己方位置变到 (12,20,5)…(18,20,5)，
+    发点仍是第 1 帧锚点，reason=hover_hold，stamp 仍用当前己方时刻，级别一直
+    NORMAL；目标缺失不进入降级状态机。
     """
-    runtime = DroneRuntime.create(P5_PARAMS)
-    own = (10.0, 20.0, 5.0)
+    runtime = DroneRuntime.create(BASELINE_PARAMS)
+    anchor = (10.0, 20.0, 5.0)
     timeline = []
+
+    scenario_chart.configure(
+        headline="HOVER：进入时锚点固定，己方漂 8 m 后发点仍是 (10,20,5)",
+        subtitle="参数：固定基线 v_max=4.50 m/s，max_step=0.74 m/帧；"
+                 "5 帧，20 Hz；目标缺失不驱动降级状态机。",
+    )
 
     for frame in range(5):
         now = 100.0 + 0.05 * frame
+        own = (10.0 + 2.0 * frame, 20.0, 5.0)
         result = plan_drone(
             runtime,
             "HOVER",
@@ -64,11 +72,11 @@ def test_scenario1_hover_without_target_publishes_own_position(measured, scenari
             None,
             ego_stamp=now,
             now=now,
-            params=P5_PARAMS,
+            params=BASELINE_PARAMS,
         )
 
         assert should_publish(result), f"第 {frame + 1} 帧不该停发"
-        assert result.point == pytest.approx(own)
+        assert result.point == pytest.approx(anchor)
         assert result.reason == "hover_hold"
         assert result.level == "NORMAL"
         assert result.action == "HOVER"
@@ -76,16 +84,15 @@ def test_scenario1_hover_without_target_publishes_own_position(measured, scenari
 
         data = payload("drone_1", now, result)
         assert data["action"] == "HOVER"
-        assert (data["x"], data["y"], data["z"]) == pytest.approx(own)
+        assert (data["x"], data["y"], data["z"]) == pytest.approx(anchor)
         assert data["stamp"] == pytest.approx(now)
         scenario_chart.add(
             now, own=own, target=None, point=result.point,
             level=result.level, reason=result.reason, series="HOVER",
         )
         timeline.append(
-            f"t={now:.2f}s 发点=是 "
-            f"({data['x']:.1f},{data['y']:.1f},{data['z']:.1f}) "
-            f"reason={result.reason} level={result.level}"
+            f"t={now:.2f}s own_x={own[0]:.1f} 发点_x={data['x']:.1f} "
+            f"stamp={data['stamp']:.2f}"
         )
 
     # HOVER 是中枢动作，P3 直接透传：连续 5 帧没有目标，FSM 也不该被驱动。
@@ -104,6 +111,11 @@ def test_scenario2_single_frame_target_is_not_chased(measured, scenario_chart):
     也只发保持点，不追。
     """
     own = (28.0, 10.0, 5.0)
+    scenario_chart.configure(
+        headline="单帧目标：估不出速度，TRACK 只发 0.74 m，INTERCEPT 拒发",
+        subtitle="目标只在 t=100.00 s 出现一帧；v_max=4.50 m/s，"
+                 "v_max_intercept=7.60 m/s，max_step=0.74 m/帧。",
+    )
     target = predict_target(
         [TargetSample(stamp=100.0, x=30.0, y=10.0, z=5.0)],
         now=100.0,
@@ -114,15 +126,15 @@ def test_scenario2_single_frame_target_is_not_chased(measured, scenario_chart):
     assert target.velocity == pytest.approx((0.0, 0.0, 0.0))
     assert target.velocity_valid is False
 
-    track_runtime = DroneRuntime.create(P5_PARAMS)
-    intercept_runtime = DroneRuntime.create(P5_PARAMS)
+    track_runtime = DroneRuntime.create(BASELINE_PARAMS)
+    intercept_runtime = DroneRuntime.create(BASELINE_PARAMS)
     timeline = []
 
     track1 = plan_drone(
-        track_runtime, "TRACK", own, target, 100.0, 100.0, P5_PARAMS
+        track_runtime, "TRACK", own, target, 100.0, 100.0, BASELINE_PARAMS
     )
     intercept1 = plan_drone(
-        intercept_runtime, "INTERCEPT", own, target, 100.0, 100.0, P5_PARAMS
+        intercept_runtime, "INTERCEPT", own, target, 100.0, 100.0, BASELINE_PARAMS
     )
 
     assert should_publish(track1)
@@ -145,10 +157,10 @@ def test_scenario2_single_frame_target_is_not_chased(measured, scenario_chart):
     )
 
     track2 = plan_drone(
-        track_runtime, "TRACK", own, None, 100.05, 100.05, P5_PARAMS
+        track_runtime, "TRACK", own, None, 100.05, 100.05, BASELINE_PARAMS
     )
     intercept2 = plan_drone(
-        intercept_runtime, "INTERCEPT", own, None, 100.05, 100.05, P5_PARAMS
+        intercept_runtime, "INTERCEPT", own, None, 100.05, 100.05, BASELINE_PARAMS
     )
     assert not should_publish(track2)
     assert not should_publish(intercept2)
@@ -167,10 +179,10 @@ def test_scenario2_single_frame_target_is_not_chased(measured, scenario_chart):
     )
 
     track3 = plan_drone(
-        track_runtime, "TRACK", own, None, 100.10, 100.10, P5_PARAMS
+        track_runtime, "TRACK", own, None, 100.10, 100.10, BASELINE_PARAMS
     )
     intercept3 = plan_drone(
-        intercept_runtime, "INTERCEPT", own, None, 100.10, 100.10, P5_PARAMS
+        intercept_runtime, "INTERCEPT", own, None, 100.10, 100.10, BASELINE_PARAMS
     )
     assert track3.level == "EXTRAPOLATING"
     assert track3.reason == "track_target_point"
@@ -218,11 +230,16 @@ def test_scenario3_constant_velocity_is_estimated_and_extrapolated(measured, sce
     state = buffer.predict(100.30, max_age=1.0, max_speed=15.0)
     assert state is not None
     assert state.velocity == pytest.approx((4.0, 0.0, 0.0))
+    scenario_chart.configure(
+        headline="匀速目标：5 帧拟合 4 m/s，TRACK 跟外推点，INTERCEPT 取最早根",
+        subtitle="目标外推到 (21.2,0,10)；INTERCEPT t_go=5.889 s，"
+                 "原始点 (44.76,0,10)，max_step=0.74 裁到 (0.74,0,10)。",
+    )
     assert state.position == pytest.approx((21.2, 0.0, 10.0))
     assert state.velocity_valid is True
     assert state.age == pytest.approx(0.10)
 
-    track_runtime = DroneRuntime.create(P5_PARAMS)
+    track_runtime = DroneRuntime.create(BASELINE_PARAMS)
     track = plan_drone(
         track_runtime,
         "TRACK",
@@ -230,14 +247,14 @@ def test_scenario3_constant_velocity_is_estimated_and_extrapolated(measured, sce
         state,
         100.30,
         100.30,
-        P5_PARAMS,
+        BASELINE_PARAMS,
     )
     assert should_publish(track)
     assert track.point == pytest.approx((21.2, 0.0, 10.0))
     assert track.reason == "track_target_point"
     assert track.level == "NORMAL"
 
-    intercept_runtime = DroneRuntime.create(P5_PARAMS)
+    intercept_runtime = DroneRuntime.create(BASELINE_PARAMS)
     intercept = plan_drone(
         intercept_runtime,
         "INTERCEPT",
@@ -245,7 +262,7 @@ def test_scenario3_constant_velocity_is_estimated_and_extrapolated(measured, sce
         state,
         100.30,
         100.30,
-        P5_PARAMS,
+        BASELINE_PARAMS,
     )
     assert should_publish(intercept)
     assert intercept.reachable is True
@@ -293,7 +310,7 @@ def test_scenario4_crossing_target_takes_earliest_intercept_root(measured, scena
     assert state.velocity == pytest.approx((-10.0, 0.0, 0.0))
     assert state.velocity_valid is True
 
-    runtime = DroneRuntime.create(P5_PARAMS)
+    runtime = DroneRuntime.create(BASELINE_PARAMS)
     result = plan_drone(
         runtime,
         "INTERCEPT",
@@ -301,7 +318,13 @@ def test_scenario4_crossing_target_takes_earliest_intercept_root(measured, scena
         state,
         100.0,
         100.0,
-        P5_PARAMS,
+        BASELINE_PARAMS,
+    )
+
+    scenario_chart.configure(
+        headline="横穿目标：两个正根，取最早的可达根 t=1.435 s",
+        subtitle="目标 (10,10,5) 以 10 m/s 向西横穿，己方 (0,0,5)，"
+                 "v_max_intercept=7.60 m/s；原始点 (-4.35,10,5)，裁剪后 0.74 m。",
     )
 
     assert should_publish(result)
@@ -320,7 +343,7 @@ def test_scenario4_crossing_target_takes_earliest_intercept_root(measured, scena
     assert raw_point[2] == pytest.approx(5.0)
     assert hypot(
         raw_point[0], raw_point[1], raw_point[2] - 5.0
-    ) == pytest.approx(P5_PARAMS.v_max_intercept * result.t_go, abs=1e-2)
+    ) == pytest.approx(BASELINE_PARAMS.v_max_intercept * result.t_go, abs=1e-2)
 
     assert result.point == pytest.approx(
         (-0.2950, 0.6786, 5.0), abs=1e-3
@@ -338,7 +361,7 @@ def test_scenario4_crossing_target_takes_earliest_intercept_root(measured, scena
         "目标 (10,10,5) 以 10 m/s 向西横穿；两个正根 "
         f"t1=1.435s、t2=3.300s，取 t1={result.t_go:.3f}s | "
         f"原始拦截点=({raw_point[0]:.2f},{raw_point[1]:.2f},{raw_point[2]:.2f}) "
-        f"距己方 {P5_PARAMS.v_max_intercept * result.t_go:.2f}m | "
+        f"距己方 {BASELINE_PARAMS.v_max_intercept * result.t_go:.2f}m | "
         f"max_step 裁剪后={_fmt(result.point)}，距己方 0.74m"
     )
 
@@ -359,9 +382,9 @@ def test_scenario5_faster_target_without_solution_uses_tail_point(measured, scen
     assert state1.velocity == pytest.approx((10.0, 0.0, 0.0))
     assert state1.velocity_valid is True
     assert state1.position == pytest.approx((30.0, 0.0, 10.0))
-    assert P5_PARAMS.v_max_intercept < state1.velocity[0]
+    assert BASELINE_PARAMS.v_max_intercept < state1.velocity[0]
 
-    runtime = DroneRuntime.create(P5_PARAMS)
+    runtime = DroneRuntime.create(BASELINE_PARAMS)
     result1 = plan_drone(
         runtime,
         "INTERCEPT",
@@ -369,17 +392,17 @@ def test_scenario5_faster_target_without_solution_uses_tail_point(measured, scen
         state1,
         100.0,
         100.0,
-        P5_PARAMS,
+        BASELINE_PARAMS,
     )
 
     raw_tail1 = (
-        state1.position[0] - P5_PARAMS.d_tail,
+        state1.position[0] - BASELINE_PARAMS.d_tail,
         state1.position[1],
         state1.position[2],
     )
     assert raw_tail1 == pytest.approx((26.0, 0.0, 10.0))
     assert state1.position[0] - raw_tail1[0] == pytest.approx(
-        P5_PARAMS.d_tail
+        BASELINE_PARAMS.d_tail
     )
     assert should_publish(result1)
     assert result1.reachable is False
@@ -390,6 +413,37 @@ def test_scenario5_faster_target_without_solution_uses_tail_point(measured, scen
         result1.point[0], result1.point[1], result1.point[2] - 10.0
     ) == pytest.approx(0.74)
     assert result1.clipped is True
+    scenario_chart.configure(
+        headline="目标 10 m/s 远离：INTERCEPT 无解，发目标后方 4 m 尾随点",
+        subtitle="目标 (30,0,10) 以 10 m/s 沿 +x 逃离，己方 (0,0,10)，"
+                 "v_max_intercept=7.60 m/s，d_tail=4.0 m，max_step=0.74 m/帧。",
+        mode="decision",
+        decision={
+            "extra_points": [
+                (0.0, 0.0, "己方 (0,0)", "#2F5D8A", "s"),
+                (
+                    26.0, 0.0, "尾随点原值 (26,0)", "#2E7D32", "*",
+                    (16.0, 2.2),
+                ),
+            ],
+            "arrows": [(30.0, 0.0, 40.0, 0.0, "10 m/s 逃离", "#D55E00")],
+            "texts": [
+                (11.0, 3.2, "目标速度 10 m/s 大于拦截上限 7.60 m/s"),
+                (5.0, -2.6, "拦截方程无正根：尾随点仍发布，下一帧可能重解"),
+            ],
+            "note": "reachable=False，reason=fallback_tail；"
+                    "max_step 把本帧点截到 (0.74,0,10)。",
+            "xlim": (-2.0, 42.0),
+            "ylim": (-5.0, 5.0),
+            "pursuit": {
+                "target_x0": 30.0,
+                "target_speed": 10.0,
+                "own_speed": 7.60,
+                "duration": 8.0,
+                "note": "8 s 时：目标 110 m，己方最多 60.8 m",
+            },
+        },
+    )
     scenario_chart.add(100.0, own=(0.0, 0.0, 10.0),
                        target=state1.position, point=result1.point,
                        level=result1.level, reason=result1.reason,
@@ -407,11 +461,11 @@ def test_scenario5_faster_target_without_solution_uses_tail_point(measured, scen
         state2,
         100.05,
         100.05,
-        P5_PARAMS,
+        BASELINE_PARAMS,
     )
 
     raw_tail2 = (
-        state2.position[0] - P5_PARAMS.d_tail,
+        state2.position[0] - BASELINE_PARAMS.d_tail,
         state2.position[1],
         state2.position[2],
     )
@@ -461,20 +515,26 @@ def test_scenario6_target_behind_triggers_u_turn_check(measured, scenario_chart)
     own = (0.0, 0.0, 5.0)
     own_velocity = (5.0, 0.0, 0.0)
 
+    scenario_chart.configure(
+        headline="目标跑到身后：INTERCEPT 判掉头不可达，ATTACK 不判",
+        subtitle="己方 (0,0,5) 以 5 m/s 向东，目标 (-2,0,5) 以 4 m/s 向西；"
+                 "R_req=2.11 m < R_min=2.55 m，INTERCEPT 退尾随点 (2,0,5)。",
+    )
+
     # 正根 t=0.5556 s 对应的拦截点在己方身后，需 180° 掉头。
     raw_intercept_x = state.position[0] + state.velocity[0] * 0.5556
     assert raw_intercept_x == pytest.approx(-4.2222, abs=1e-3)
     chord = abs(raw_intercept_x - own[0])
     required_radius = chord / 2.0
     min_radius = max(
-        own_velocity[0] ** 2 / P5_PARAMS.a_max,
-        own_velocity[0] / P5_PARAMS.yaw_rate_max,
+        own_velocity[0] ** 2 / BASELINE_PARAMS.a_max,
+        own_velocity[0] / BASELINE_PARAMS.yaw_rate_max,
     )
     assert required_radius == pytest.approx(2.1111, abs=1e-3)
     assert min_radius == pytest.approx(2.5536, abs=1e-3)
     assert required_radius < min_radius
 
-    intercept_runtime = DroneRuntime.create(P5_PARAMS)
+    intercept_runtime = DroneRuntime.create(BASELINE_PARAMS)
     intercept = plan_drone(
         intercept_runtime,
         "INTERCEPT",
@@ -482,7 +542,7 @@ def test_scenario6_target_behind_triggers_u_turn_check(measured, scenario_chart)
         state,
         100.0,
         100.0,
-        P5_PARAMS,
+        BASELINE_PARAMS,
         ego_velocity=own_velocity,
     )
 
@@ -493,7 +553,7 @@ def test_scenario6_target_behind_triggers_u_turn_check(measured, scenario_chart)
     assert intercept.t_go is None
     assert intercept.level == "NORMAL"
     raw_tail = (
-        state.position[0] - (-1.0) * P5_PARAMS.d_tail,
+        state.position[0] - (-1.0) * BASELINE_PARAMS.d_tail,
         state.position[1],
         state.position[2],
     )
@@ -502,7 +562,7 @@ def test_scenario6_target_behind_triggers_u_turn_check(measured, scenario_chart)
     assert intercept.clipped is True
 
     # 同一几何换 ATTACK：不做掉头判定，照发拦截点，哪怕它也在身后。
-    attack_runtime = DroneRuntime.create(P5_PARAMS)
+    attack_runtime = DroneRuntime.create(BASELINE_PARAMS)
     attack = plan_drone(
         attack_runtime,
         "ATTACK",
@@ -510,7 +570,7 @@ def test_scenario6_target_behind_triggers_u_turn_check(measured, scenario_chart)
         state,
         100.0,
         100.0,
-        P5_PARAMS,
+        BASELINE_PARAMS,
         ego_velocity=own_velocity,
     )
     assert should_publish(attack)
@@ -544,13 +604,13 @@ def test_scenario6_target_behind_triggers_u_turn_check(measured, scenario_chart)
 
 
 def test_scenario7_target_loss_0p3s_stale_sample_vs_l1(measured, scenario_chart):
-    """目标消失 0.3 s：旧样本走 L0 外推，目标流断掉走 L1 外推。
+    """目标消失 0.3 s：缓存样本走 L0 外推，目标流断掉走 L1 外推。
 
     场景：目标以 2 m/s 沿 +x 飞，最后两帧采样在 t=99.95/100.00 s，
     t=100.00 时在 (20,0,10)。t=100.30 时比较两种输入形态：缓存里仍有
-    旧样本，或目标流已经完全消失（target=None）。
+    缓存样本，或目标流已经完全消失（target=None）。
 
-    预期：旧样本 age=0.30 s < max_pred_age=0.50 s，TRACK 仍在 NORMAL，
+    预期：缓存样本 age=0.30 s < max_pred_age=0.50 s，TRACK 仍在 NORMAL，
     P1 已把位置外推到 (20.60,0,10)。目标流消失时，第 1 帧 NORMAL 不发，
     第 2 帧进 L1；t=100.30 时 L1 用最后可用样本加 CV 外推，得到同一个
     (20.60,0,10)。t_extrap_max=1.0 s 才是 L1 的上限，超过才进 L2。
@@ -565,15 +625,21 @@ def test_scenario7_target_loss_0p3s_stale_sample_vs_l1(measured, scenario_chart)
     assert last.velocity == pytest.approx((2.0, 0.0, 0.0))
     assert last.velocity_valid is True
 
-    # 形态一：缓存里还有旧样本。P1 外推到 now，P2 仍按 age<=0.5 放行。
+    # 形态一：缓存里还有样本。P1 外推到 now，P2 仍按 age<=0.5 放行。
     stale = buffer.predict(100.30, max_age=1.0, max_speed=15.0)
     assert stale is not None
     assert stale.age == pytest.approx(0.30)
     assert stale.valid is True
     assert stale.position == pytest.approx((20.6, 0.0, 10.0))
-    assert stale.age < P5_PARAMS.max_pred_age
+    assert stale.age < BASELINE_PARAMS.max_pred_age
 
-    stale_runtime = DroneRuntime.create(P5_PARAMS)
+    scenario_chart.configure(
+        headline="目标消失 0.3 s：缓存样本走 NORMAL，目标流断掉走 L1",
+        subtitle="最后样本 (20,0,10)，速度 2 m/s；max_pred_age=0.5 s，"
+                 "t_extrap_max=1.0 s；两种输入外推到 (20.6,0,10)。",
+    )
+
+    stale_runtime = DroneRuntime.create(BASELINE_PARAMS)
     stale_result = plan_drone(
         stale_runtime,
         "TRACK",
@@ -581,7 +647,7 @@ def test_scenario7_target_loss_0p3s_stale_sample_vs_l1(measured, scenario_chart)
         stale,
         100.30,
         100.30,
-        P5_PARAMS,
+        BASELINE_PARAMS,
     )
     assert should_publish(stale_result)
     assert stale_result.level == "NORMAL"
@@ -590,13 +656,13 @@ def test_scenario7_target_loss_0p3s_stale_sample_vs_l1(measured, scenario_chart)
     scenario_chart.add(100.30, own=(20.4, 0.0, 10.0),
                        target=stale.position, point=stale_result.point,
                        level=stale_result.level,
-                       reason=stale_result.reason, series="A 缓存旧样本")
+                       reason=stale_result.reason, series="A 缓存样本")
 
     # 形态二：目标流完全消失，target=None，逐帧推进状态机。
-    runtime = DroneRuntime.create(P5_PARAMS)
+    runtime = DroneRuntime.create(BASELINE_PARAMS)
 
     frame1 = plan_drone(
-        runtime, "TRACK", (19.8, 0.0, 10.0), last, 100.0, 100.0, P5_PARAMS
+        runtime, "TRACK", (19.8, 0.0, 10.0), last, 100.0, 100.0, BASELINE_PARAMS
     )
     assert should_publish(frame1)
     assert frame1.level == "NORMAL"
@@ -604,10 +670,10 @@ def test_scenario7_target_loss_0p3s_stale_sample_vs_l1(measured, scenario_chart)
     scenario_chart.add(100.0, own=(19.8, 0.0, 10.0),
                        target=last.position, point=frame1.point,
                        level=frame1.level, reason=frame1.reason,
-                       series="B target=None")
+                       series="B 目标流断掉")
 
     frame2 = plan_drone(
-        runtime, "TRACK", (19.8, 0.0, 10.0), None, 100.05, 100.05, P5_PARAMS
+        runtime, "TRACK", (19.8, 0.0, 10.0), None, 100.05, 100.05, BASELINE_PARAMS
     )
     assert not should_publish(frame2)
     assert frame2.level == "NORMAL"
@@ -615,10 +681,10 @@ def test_scenario7_target_loss_0p3s_stale_sample_vs_l1(measured, scenario_chart)
     scenario_chart.add(100.05, own=(19.8, 0.0, 10.0),
                        target=None, point=frame2.point,
                        level=frame2.level, reason=frame2.reason,
-                       series="B target=None")
+                       series="B 目标流断掉")
 
     frame3 = plan_drone(
-        runtime, "TRACK", (19.9, 0.0, 10.0), None, 100.10, 100.10, P5_PARAMS
+        runtime, "TRACK", (19.9, 0.0, 10.0), None, 100.10, 100.10, BASELINE_PARAMS
     )
     assert should_publish(frame3)
     assert frame3.level == "EXTRAPOLATING"
@@ -627,10 +693,10 @@ def test_scenario7_target_loss_0p3s_stale_sample_vs_l1(measured, scenario_chart)
     scenario_chart.add(100.10, own=(19.9, 0.0, 10.0),
                        target=None, point=frame3.point,
                        level=frame3.level, reason=frame3.reason,
-                       series="B target=None")
+                       series="B 目标流断掉")
 
     frame4 = plan_drone(
-        runtime, "TRACK", (20.4, 0.0, 10.0), None, 100.30, 100.30, P5_PARAMS
+        runtime, "TRACK", (20.4, 0.0, 10.0), None, 100.30, 100.30, BASELINE_PARAMS
     )
     expected_l1 = (
         last.position[0] + last.velocity[0] * 0.30,
@@ -643,14 +709,14 @@ def test_scenario7_target_loss_0p3s_stale_sample_vs_l1(measured, scenario_chart)
     assert frame4.reason == "track_target_point"
     assert frame4.point == pytest.approx(expected_l1)
     assert frame4.point == pytest.approx(stale_result.point)
-    assert 100.30 - last.stamp < P5_PARAMS.t_extrap_max
+    assert 100.30 - last.stamp < BASELINE_PARAMS.t_extrap_max
     scenario_chart.add(100.30, own=(20.4, 0.0, 10.0),
                        target=None, point=frame4.point,
                        level=frame4.level, reason=frame4.reason,
-                       series="B target=None")
+                       series="B 目标流断掉")
 
     measured(
-        "t=100.30 旧样本在缓存：age=0.30s < max_pred_age=0.50s "
+        "t=100.30 缓存样本：age=0.30s < max_pred_age=0.50s "
         f"→ NORMAL，P1 外推到 {_fmt(stale_result.point)} | "
         "目标流断：t=100.05 第1帧 NORMAL 不发；"
         "t=100.10 第2帧进 L1，点 (20.20,0,10)；"

@@ -17,7 +17,7 @@ from algorithm_pkg.adapter_core import (
 )
 from algorithm_pkg.plan_params import PlanParams
 
-P5_PARAMS = PlanParams(
+BASELINE_PARAMS = PlanParams(
     v_max=4.50,
     v_max_intercept=7.60,
     v_max_attack=14.80,
@@ -64,19 +64,24 @@ def test_multiframe_chase_loss_dropout_reacquire(measured, scenario_chart):
     8.0～8.5 s 己方状态消失。目标流消失、己方断流分别用阶段底色 A/B 标出。
 
     预期：前 5 s 距离持续缩小；丢失后进 L1→L2，保持点不再跟着目标；
-    己方断流进 L3，不发点；重捕后回 NORMAL，12 s 前距离 ≤0.5 m。
+    己方断流进 L3，不发点；重捕后回 NORMAL，12.2 s 前距离 ≤0.5 m。
     """
     buffer = TargetBuffer()
-    runtime = DroneRuntime.create(P5_PARAMS)
+    runtime = DroneRuntime.create(BASELINE_PARAMS)
     own = (0.0, 0.0, 10.0)
     records = {}
 
-    scenario_chart.title("多帧追逃：先追 → 目标丢失 → 己方断流 → 重捕追上")
+    scenario_chart.configure(
+        headline="多帧追逃：先追 5 s，目标丢失 1.5 s，己方断流 0.5 s，"
+                 "重捕后 12.2 s 命中",
+        subtitle="参数：固定基线 v_max=4.50 m/s、max_step=0.74 m/帧；"
+                 "target_timeout=0.5 s、t_extrap_max=1.0 s；20 Hz。",
+    )
     scenario_chart.note(
-        "参数：P5 v_max=4.50、max_step=0.74、max_pred_age=0.5、"
+        "参数：固定基线 v_max=4.50、max_step=0.74、max_pred_age=0.5、"
         "t_extrap_max=1.0；action=TRACK。\n"
         "拐点 A：105.00 target_missing；105.05 L1；"
-        "106.00 hold_last_valid（L2 点冻结）；"
+        "106.00 hold_fixed_anchor（L2 锚定进 L2 时位置）；"
         "106.50 目标回来；106.70 恢复 NORMAL。\n"
         "拐点 B：108.00 own_invalid；108.05 no_plan_ego_lost（L3 不发点）；"
         "108.50 恢复 HOLDING；108.60 NORMAL；112.00 重捕。"
@@ -117,18 +122,18 @@ def test_multiframe_chase_loss_dropout_reacquire(measured, scenario_chart):
         own_arg = None if ego_lost else own
         ego_stamp = None if ego_lost else now
         result = plan_drone(
-            runtime, "TRACK", own_arg, target, ego_stamp, now, P5_PARAMS
+            runtime, "TRACK", own_arg, target, ego_stamp, now, BASELINE_PARAMS
         )
         distance = _distance(own, target_truth)
         records[round(t, 2)] = (result, own, target_truth, distance)
         scenario_chart.add(
             now, own=own_arg, target=target.position if target else None,
             truth=target_truth, point=result.point, level=result.level,
-            reason=result.reason, series="chase",
+            reason=result.reason, series="chase", own_truth=own,
         )
 
         if result.point is not None and not ego_lost:
-            own = _step_toward(own, result.point, P5_PARAMS.v_max * DT)
+            own = _step_toward(own, result.point, BASELINE_PARAMS.v_max * DT)
 
     # 前 5 s：追近，但还没命中。
     assert records[5.0][3] < 15.0
@@ -149,7 +154,7 @@ def test_multiframe_chase_loss_dropout_reacquire(measured, scenario_chart):
     # 6.0 s：丢失超过 1.0 s，进 L2；保持点不再跟目标。
     holding = records[6.0][0]
     assert holding.level == "HOLDING"
-    assert holding.reason == "hold_last_valid"
+    assert holding.reason == "hold_fixed_anchor"
     assert holding.point is not None
     assert holding.point[0] < records[6.0][2][0] - 1.0
 
@@ -178,13 +183,13 @@ def test_multiframe_chase_loss_dropout_reacquire(measured, scenario_chart):
         distance for t, (_, _, _, distance) in records.items() if t >= 8.5
     ]
     assert min(after_recovery) <= 0.5
-    assert records[12.0][3] <= 0.5
-    assert records[12.0][0].level == "NORMAL"
+    assert records[12.2][3] <= 0.5
+    assert records[12.2][0].level == "NORMAL"
 
     measured(
         f"5 s 追到 {records[5.0][3]:.2f} m；目标丢失 1.5 s 进 L2，"
         f"保持点 {records[6.0][0].point[0]:.2f} m 不跟目标 "
         f"{records[6.0][2][0]:.2f} m；断流 0.5 s 进 L3；"
-        f"重捕后 12 s 距离 {records[12.0][3]:.2f} m，"
+        f"重捕后 12.2 s 距离 {records[12.2][3]:.2f} m，"
         f"最终最小距离 {min(after_recovery):.2f} m"
     )

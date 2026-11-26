@@ -3,11 +3,11 @@
 代码兜底仍是宪章 ``V_max = 6.0 m/s``、``a_max = 2.0 m/s²``、``yaw = 90°/s``，
 所以不依赖 launch 的单测也能跑。
 
-launch 按 P5 本机实测能力收口（2026-11-20，``x500_down_cam``）：
+launch 按本机实测能力配置（``x500_down_cam``）：
 ``V_cruise=4.50``（实测 5.49，保守取值）、``V_intercept=7.60``、
 ``V_max=14.80``（实测 14.69）、``a_max=9.79``、``yaw=172.4°/s``。
 学长理论值 ``23.59 / 10.82 / 185.2`` 保留为常量只作参考，本仿真不可达。
-P5 实测见 ``文档/算法测试基本方法.md`` 第 8 章。
+实测数据见 ``docs/算法测试基本方法.md`` 第 8 章。
 """
 
 from __future__ import annotations
@@ -16,13 +16,13 @@ from dataclasses import dataclass
 from math import isfinite, radians
 from typing import Optional
 
-# 代码兜底值：宪章 6.0 / 2.0 / 90。launch 会覆盖成 P5 实测收口值。
+# 代码兜底值：宪章 6.0 / 2.0 / 90。launch 会覆盖成本机实测值。
 CHARTER_V_MAX = 6.0
 CHARTER_A_MAX = 2.0
 CHARTER_YAW_RATE_MAX = radians(90.0)
 
 # ! 学长桥接模块的基准，只作理论参考，不是本机实测。
-# ! P5 最终实测（x500_down_cam）：V_max=14.69、a_max=9.79、yaw=172.4 deg/s、R_min≈3.03 m。
+# ! 本机实测（x500_down_cam）：V_max=14.69、a_max=9.79、yaw=172.4 deg/s、R_min≈3.03 m。
 # ! 理论 23.59 在本仿真不可达，只保留常量作对照。
 THEORY_V_CRUISE = 4.50
 THEORY_V_INTERCEPT = 7.60
@@ -40,13 +40,13 @@ class PlanParams:
         v_max_intercept: INTERCEPT 速度上限，米/秒；代码兜底 6.0，
             launch 用 7.60（桥接 INTERCEPT 档 0.38×20）。
         v_max_attack: ATTACK 速度上限，米/秒；代码兜底 6.0，
-            launch 用 P5 实测收口 14.80（理论 23.59 不可达，仅注释参考）。
+            launch 用本机实测 14.80（理论 23.59 不可达，仅注释参考）。
         a_max: 最大水平加速度，米/秒²；代码兜底 2.0，
-            launch 用 P5 实测 9.79。P6 起参与 ``solve_intercept`` 的
+            launch 用本机实测 9.79。参与 ``solve_intercept`` 的
             最小转弯半径判定 ``R_min = max(v²/a_max, v/yaw_rate_max)``，
             只在 INTERCEPT 且拿到己方速度时生效。
         yaw_rate_max: 最大偏航角速度，弧度/秒；代码兜底 90°/s，
-            launch 用 P5 实测 172.4°/s。P6 起与 a_max 一起构成
+            launch 用本机实测 172.4°/s。与 a_max 一起构成
             最小转弯半径的角速度约束。
         t_go_max: 最长允许拦截时间，秒；超过认为追不上。
         min_distance: 目标太近时不出点，米。
@@ -55,7 +55,10 @@ class PlanParams:
         safe_alt: TRACK/INTERCEPT 最低高度，米。
         max_alt: 最高高度，米。
         max_xy: 水平边界，x/y 限制在 ±max_xy，米。
-        max_step: 单帧最大位移，米；None 表示不限制。
+        max_step: 单帧最大位移兜底，米；None 表示不限制。
+        max_step_track: TRACK 的单帧最大位移，米；None 表示用 max_step。
+        max_step_intercept: INTERCEPT 的单帧最大位移，米；None 表示用 max_step。
+        max_step_attack: ATTACK 的单帧最大位移，米；None 表示用 max_step。
         max_pred_age: 目标预测允许的最大年龄，秒。
             即使 ``TargetState.valid`` 为 True，超过这个年龄也不规划。
         t_extrap_max: P3 允许用 CV 外推继续追的时间上限，秒。
@@ -94,6 +97,9 @@ class PlanParams:
     max_alt: float = 50.0
     max_xy: float = 1000.0
     max_step: Optional[float] = None
+    max_step_track: Optional[float] = None
+    max_step_intercept: Optional[float] = None
+    max_step_attack: Optional[float] = None
     max_pred_age: float = 0.5
 
     # ------------------------- P3 异常降级参数 -------------------------
@@ -112,6 +118,20 @@ class PlanParams:
     hold_point_source: str = "last_valid"
     ego_timeout: float = 1.0
     target_min_alt: float = 0.0
+
+    def max_step_for(self, action: object) -> Optional[float]:
+        """返回某个动作的单帧最大位移，米。
+
+        ``TRACK``/``INTERCEPT``/``ATTACK`` 优先用各自的专用值；没配时
+        回落到 ``max_step``。其他动作（HOVER 等）一律用 ``max_step``。
+        """
+        key = str(action).strip().upper()
+        override = {
+            "TRACK": self.max_step_track,
+            "INTERCEPT": self.max_step_intercept,
+            "ATTACK": self.max_step_attack,
+        }.get(key)
+        return override if override is not None else self.max_step
 
     def __post_init__(self) -> None:
         """在创建参数对象时就把配置错误暴露出来。"""
@@ -141,9 +161,15 @@ class PlanParams:
             raise ValueError("max_alt must be at least min_alt and safe_alt")
         if not isfinite(self.max_xy) or self.max_xy <= 0.0:
             raise ValueError("max_xy must be positive")
-        if self.max_step is not None:
-            if not isfinite(self.max_step) or self.max_step <= 0.0:
-                raise ValueError("max_step must be positive when provided")
+        for name, value in (
+            ("max_step", self.max_step),
+            ("max_step_track", self.max_step_track),
+            ("max_step_intercept", self.max_step_intercept),
+            ("max_step_attack", self.max_step_attack),
+        ):
+            if value is not None:
+                if not isfinite(value) or value <= 0.0:
+                    raise ValueError(f"{name} must be positive when provided")
         if not isfinite(self.max_pred_age) or self.max_pred_age <= 0.0:
             raise ValueError("max_pred_age must be positive")
 

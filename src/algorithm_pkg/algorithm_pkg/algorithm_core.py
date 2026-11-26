@@ -6,7 +6,7 @@ P1 假设：
 - 目标做匀速直线运动（CV 模型）。
 - 己方在拦截点方向上的速度上限是 v_max；可选传入己方当前速度，
   此时用最大加速度 a_max 与最大偏航角速度 omega_max 做一次动力学
-  可达性判定（转弯半径）。不传速度时不做判定，保持 P5 行为。
+  可达性判定（转弯半径）。不传速度时不做判定。
   判定只对 INTERCEPT 生效；ATTACK 的末段语义尚未定案，不在此改变。
 - 位置、速度都使用右手 ENU 坐标系，单位米 / 米每秒。
 
@@ -32,7 +32,7 @@ _EPS = 1e-9
 # 强行判定会把所有转弯都放过，不如显式跳过。
 _MIN_TURN_SPEED = 0.5
 
-# 代码兜底的动力学参数（宪章值）。launch 会传 P5 实测值覆盖。
+# 代码兜底的动力学参数（宪章值）。launch 会传实测值覆盖。
 _CHARTER_A_MAX = 2.0
 _CHARTER_OMEGA_MAX = pi / 2.0
 
@@ -472,37 +472,56 @@ def solve_intercept(
                     candidates.append(t_root)
 
     if candidates:
-        # 只保留 (0, t_go_max] 内的正根；取最早到达的那个。
-        t_go = min(candidates)
-        point = (
-            target.position[0] + target.velocity[0] * t_go,
-            target.position[1] + target.velocity[1] * t_go,
-            target.position[2] + target.velocity[2] * t_go,
-        )
-        if not _finite(*point):
-            return InterceptSolution(
-                action, None, False, None, "non_finite_solution"
-            )
+        # 只保留 (0, t_go_max] 内的正根，按时间从早到晚排。
+        ordered = sorted(candidates)
 
-        # ! 几何有解不等于飞得到：掉头、急转所需半径可能小于 R_min。
-        # ! 判定只对 INTERCEPT 生效，且只在调用方给了己方速度时做：
-        # ! ATTACK 末段的语义（撞击还是贴近后保持）P5 文档明确留给后续定案，
-        # ! 这里不顺手用动力学判定改掉它，详见 README「未确认 / 待决策」。
-        if (
-            action == "INTERCEPT"
-            and own_velocity is not None
-            and _turn_infeasible(own, own_velocity, point, a_max, omega_max)
-        ):
-            tail = _tail_point(target, d_tail)
-            if not _finite(*tail):
+        # 没给己方速度，或动作不是 INTERCEPT 时，不判动力学，取最早根。
+        if action != "INTERCEPT" or own_velocity is None:
+            t_go = ordered[0]
+            point = (
+                target.position[0] + target.velocity[0] * t_go,
+                target.position[1] + target.velocity[1] * t_go,
+                target.position[2] + target.velocity[2] * t_go,
+            )
+            if not _finite(*point):
                 return InterceptSolution(
                     action, None, False, None, "non_finite_solution"
                 )
             return InterceptSolution(
-                action, tail, False, None, "dynamic_infeasible_tail"
+                action, point, True, t_go, "intercept_point"
             )
 
-        return InterceptSolution(action, point, True, t_go, "intercept_point")
+        # 几何有解不等于飞得到：掉头、急转所需半径可能小于 R_min。
+        # 早根转不过来时继续试晚根，不能直接退尾随点。
+        finite_roots = 0
+        for t_go in ordered:
+            point = (
+                target.position[0] + target.velocity[0] * t_go,
+                target.position[1] + target.velocity[1] * t_go,
+                target.position[2] + target.velocity[2] * t_go,
+            )
+            if not _finite(*point):
+                continue
+            finite_roots += 1
+            if _turn_infeasible(own, own_velocity, point, a_max, omega_max):
+                continue
+            return InterceptSolution(
+                action, point, True, t_go, "intercept_point"
+            )
+
+        if finite_roots == 0:
+            return InterceptSolution(
+                action, None, False, None, "non_finite_solution"
+            )
+
+        tail = _tail_point(target, d_tail)
+        if not _finite(*tail):
+            return InterceptSolution(
+                action, None, False, None, "non_finite_solution"
+            )
+        return InterceptSolution(
+            action, tail, False, None, "dynamic_infeasible_tail"
+        )
 
     # ! ATTACK 无解时不能退回尾随点。
     # ! 否则飞机会按 ATTACK 全速飞向目标后方，动作和意图完全错位。
@@ -639,7 +658,6 @@ def apply_constraints(
                 _clamp(clamped[2], z_min, max_alt),
             )
 
-    # TODO: max_step 目前由调用方按 v_max*dt 给初值；
-    # TODO: a_max/R_min 已用于 solve_intercept 的转弯半径判定（P6），
-    # TODO: 但还没用于 max_step 的自适应标定，留到后续。
+    # max_step 由调用方按 v_max*dt 给初值。
+    # a_max/R_min 只用于 solve_intercept 的转弯半径判定，还没用于 max_step 的自适应标定。
     return clamped

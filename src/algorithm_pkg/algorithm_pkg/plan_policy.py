@@ -3,8 +3,8 @@
 调用顺序故意固定，目的是让错误原因可复现：
 
 1. 归一化动作；未知动作直接拒绝；
-2. HOVER 发己方当前位置（原地保持）；TAKEOFF/RETURN 由中枢负责；
-   RESUME_PATROL 暂不定义；
+2. HOVER 发适配层保存的固定锚点；TAKEOFF/RETURN 由中枢负责；
+   RESUME_PATROL 在节点层保持原模式；
 3. 检查目标是否存在、是否有效、是否太旧；
 4. 检查己方位置是否有效；
 5. INTERCEPT/ATTACK 还要求目标速度有效；
@@ -53,6 +53,22 @@ def _finite_vec(value: Optional[Vec3]) -> bool:
     return all(isfinite(component) for component in value)
 
 
+def hover_in_envelope(own: Optional[Vec3], params: PlanParams) -> bool:
+    """己方位置是否能作为 HOVER 点发给中枢。
+
+    中枢 ``plan_callback`` 只接受 ``|x|/|y| <= max_xy``、
+    ``min_alt <= z <= max_alt`` 的点；越界会在中枢被丢弃。
+    """
+    if not _finite_vec(own):
+        return False
+    return not (
+        abs(own[0]) > params.max_xy
+        or abs(own[1]) > params.max_xy
+        or own[2] < params.min_alt
+        or own[2] > params.max_alt
+    )
+
+
 def plan(
     raw_action: object,
     own: Optional[Vec3],
@@ -70,7 +86,7 @@ def plan(
         target: ``predict_target`` 的输出；``None`` 表示还没有目标。
         params: 策略参数；``None`` 时使用 ``PlanParams()`` 的默认值。
         own_velocity: 己方当前速度，ENU 米/秒；``None`` 表示调用方没提供，
-            此时不做动力学可达性判定，行为与 P5 一致。
+            此时不做动力学可达性判定。
 
     Returns:
         ``PlanResult``。调用方只应在 ``result.point is not None`` 时发布。
@@ -90,20 +106,14 @@ def plan(
         return _no_plan(action, raw, "unknown_action")
 
     # 2. 中枢自己生成坐标的动作：规划节点不参与。
-    #    HOVER 例外：《内部分工细节》把它定义为“在当前坐标原地保持不动”，
-    #    所以直接发己方当前位置。这样即使中枢还在用上一帧规划点，也会被
-    #    这一帧的保持点覆盖。
+    #    HOVER 例外：适配层把固定锚点当作 own 传进来，这里只检查包线。
+    #    锚点的保存和清除在 adapter_core，P2 保持纯函数。
     if action == "HOVER":
         if not _finite_vec(own):
             return _no_plan(action, raw, "own_invalid")
         # ! 地面/越界时不发：中枢 plan_callback 只接受
         # ! z ∈ [min_alt, max_alt]、|x|/|y| <= max_xy，越界会被丢弃并打 warn。
-        if (
-            abs(own[0]) > params.max_xy
-            or abs(own[1]) > params.max_xy
-            or own[2] < params.min_alt
-            or own[2] > params.max_alt
-        ):
+        if not hover_in_envelope(own, params):
             return _no_plan(action, raw, "hover_out_of_envelope")
         return PlanResult(
             action=action,
@@ -173,7 +183,7 @@ def plan(
         safe_alt=params.safe_alt,
         max_alt=params.max_alt,
         max_xy=params.max_xy,
-        max_step=params.max_step,
+        max_step=params.max_step_for(action),
     )
     if point is None:
         return PlanResult(

@@ -1,35 +1,76 @@
-# algorithm_pkg 算法包说明
+# algorithm_pkg 算法包
 
-本包计算无人机编队的规划点：接收目标位置、己方状态和战术指令，输出一个 ENU 点和动作标签，发布到 `/planning/target_pose`。本包不控制飞行器，不处理避障、姿态、油门和速度控制。
+本包计算无人机编队的规划点。输入目标位置、己方状态和战术指令，输出一个 ENU 点和动作标签，发布到 `/planning/target_pose`。本包不控制飞行器，不处理避障、姿态、油门和速度闭环。
 
-当前状态：P1～P4 已完成，P5 参数化与收口已加入，P6 已把 a_max/R_min 的动力学可达性判定接入 INTERCEPT，并在容器内四场景复跑通过；235 项 pytest（unit 214 + scenario 15 + sim 6）。Jazzy 下 `colcon build` 与 `colcon test` 通过。
+测试：267 项通过（unit 239、scenario 20、sim 8），生成 25 张证据图。Humble 容器 `colcon build` 与 `colcon test` 通过：267 tests，0 errors，0 failures，0 skipped。真实视觉链路和多机 Gazebo 联调不在本包验收范围，见“已知限制”。
 
-阅读建议：
+## 1. 快速开始
 
-- 需要运行或联调：见“运行”与“接口”。
-- 需要排查异常：见“外部系统限制与已知问题”，以及 [文档/算法测试基本方法.md](../../文档/算法测试基本方法.md)。
-- 需要修改代码：先看“代码分层与职责边界”。
+### 依赖
 
----
+- ROS 2 Humble，用于节点和 launch。
+- Python 3.10 或更高版本。
+- 纯 Python 测试需要 `pytest`、`matplotlib`。图表中文需要 `fonts-noto-cjk`；缺失时图表会生成，但中文会缺字形。
+- 从仓库根目录执行命令，包路径为 `src/algorithm_pkg`。
 
-## 1. 系统定位与数据流
+### 构建与运行
 
-本包在系统中的职责是计算规划点，不承担飞行控制。中枢负责状态机、限幅和指令下发；飞控负责动力学执行。
+```bash
+cd ~/ros2_ws
+colcon build --packages-select algorithm_pkg
+source install/setup.bash
+ros2 launch algorithm_pkg algorithm.launch.py
+```
 
-输入与输出：
+本 launch 只启动算法节点。中枢、视觉、桥接和飞控由其它包启动，整栈顺序见仓库根目录的 README。
 
-| 项目 | 来源 / 去向 | 说明 |
+节点启动后默认 `HOVER`。收到 `/strategy/cmd` 的 `TRACK`、`INTERCEPT` 或 `ATTACK` 后发布规划点；`TAKEOFF`、`RETURN` 不发布规划点。典型顺序是先 `TAKEOFF`，再 `TRACK` 或 `INTERCEPT` / `ATTACK`，最后 `RETURN`。
+
+### 测试
+
+纯 Python 测试不需要 ROS，不需要 launch，也不需要中枢在线。下面的 `/usr/bin/python3` 是本项目主机的系统解释器；换机器时，换成你环境里装了 pytest 的 `python3` 或 venv 的 `python`。
+
+```bash
+# 全部
+PYTHONPATH=src/algorithm_pkg /usr/bin/python3 -m pytest -q src/algorithm_pkg/test
+
+# 单元测试，不出图
+PYTHONPATH=src/algorithm_pkg /usr/bin/python3 -m pytest -q \
+    src/algorithm_pkg/test/unit
+
+# 情景测试，出图
+PYTHONPATH=src/algorithm_pkg /usr/bin/python3 -m pytest -q \
+    src/algorithm_pkg/test/scenario \
+    --scenario-chart-dir /tmp/algorithm_scenario_charts
+
+# 多帧仿真，出图
+PYTHONPATH=src/algorithm_pkg /usr/bin/python3 -m pytest -q \
+    src/algorithm_pkg/test/sim \
+    --scenario-chart-dir /tmp/algorithm_scenario_charts
+
+# 单条用例
+PYTHONPATH=src/algorithm_pkg /usr/bin/python3 -m pytest -q \
+    src/algorithm_pkg/test/unit/test_safety_guard.py::test_step_limited
+```
+
+测试结束后终端会打印“算法实测结果”和证据图路径。默认图目录是 `/tmp/algorithm_scenario_charts`，可以用 `--scenario-chart-dir` 改。
+
+## 2. 系统定位
+
+本包只负责一件事：根据输入算出一个规划点。中枢负责状态机、限幅和下发，飞控负责动力学执行，视觉负责目标定位。
+
+| 项目 | 来源或去向 | 说明 |
 |---|---|---|
-| 目标位置 | `/vision/target_pose` 或 `/external/target_detected` | 用于速度估计和位置外推 |
-| 己方位置 | `/drone_<id>/state` | 用于计算距离和方向 |
+| 目标位置 | `/vision/target_pose_cov`、`/vision/target_pose` 或 `/external/target_detected` | 用于速度估计和位置外推 |
+| 己方位置 | `/drone_<id>/state` | 用于计算距离、方向和锚点 |
 | 战术指令 | `/strategy/cmd` | 决定本帧使用的动作 |
-| 规划点 | `/planning/target_pose` | ENU 坐标（东-北-天，米）与动作标签 |
+| 规划点 | `/planning/target_pose` | ENU 坐标和动作标签 |
 
-ENU 坐标系的原点由上游约定。本包不做坐标变换，也不定义原点，只要求目标位置和己方位置处于同一坐标系。
+ENU 原点由上游约定。本包不做坐标变换，也不定义原点，只要求目标位置和己方位置在同一坐标系。
 
-本包不处理以下事项：避障、姿态、油门、中枢状态机、中枢模式切换、飞控加速度限制。上述职责属于其他模块或飞控。
+本包不处理避障、姿态、油门、中枢状态机、中枢模式切换和飞控加速度限制。
 
-### 数据流
+## 3. 数据流与单帧处理
 
 ```text
  视觉目标          己方状态          战术指令
@@ -42,94 +83,94 @@ ENU 坐标系的原点由上游约定。本包不做坐标变换，也不定义�
               │  纯 Python 数据，不含 ROS 类型
               ▼
      adapter_core.py ………………… 适配逻辑
-       时间戳过滤 · 目标缓存 · 视觉/外部选源 · 每机运行状态
+       时间戳过滤 · 目标缓存 · 每机运行状态 · 锚点
               ▼
      degrade_policy.py …………… 降级调度
-       判断本帧输入是否可用，确定 L0/L1/L2/L3
+       判断输入是否可用，确定 L0/L1/L2/L3
               ▼
      plan_policy.py ………………… 动作策略
        判断本帧是否发点、发哪个点、给出原因
               ▼
      algorithm_core.py …………… 几何计算
-       速度估计 · 位置外推 · 拦截方程求解 · 边界裁剪
+       速度估计 · 位置外推 · 拦截求解 · 边界裁剪
               ▼
      safety_guard.py ……………… 输出约束
-       非有限值 · XY 边界 · 高度 · 跳变 · 最小距离 · 时间戳单调
+       非有限值 · XY 边界 · 高度 · 跳变 · 最小距离 · 时间戳
               ▼
      /planning/target_pose  →  规划点消息
 ```
 
-P3 在流程中出现两次：入口处判断输入是否可用，出口处执行输出约束。该顺序是固定的，原因见第 4 节。
+单帧流程：
 
-P1～P4 是内部分层编号：P1 几何计算、P2 动作策略、P3 异常降级与安全约束、P4 ROS 适配与联调。
+1. 接收目标帧。先过滤时间戳，再进入缓存。时间戳为零、超前、倒退或含非有限值的帧被丢弃，不进入缓存，也不参与降级计数。
+2. 20 Hz 定时器选择目标源。视觉在 `target_timeout=0.5 s` 内有新帧时优先使用视觉，否则使用外部引导。带协方差话题优先，无协方差话题在带协方差话题停 0.5 s 后回退。
+3. 每架飞机执行一次 `plan_drone()`：输入校验、更新降级级别、按级别规划、输出约束。
+4. `point` 非空时发布 JSON。`stamp` 取该帧所用数据的源头时刻；没有来源时回落到发布时刻。
+5. 中枢按自身模式和限幅执行。接口 C 的 `action` 只用于选择速度和 HOVER 点筛选，不驱动中枢模式。
 
-### 单帧处理流程
+只有 `algorithm_node.py` 依赖 ROS，其余模块可以在无 ROS 环境运行 pytest。
 
-1. **接收**：目标帧先经过时间戳过滤，再进入缓存。时间戳为零、超前于当前时刻、倒退或含非有限值的帧被丢弃，不进入缓存，也不参与降级计数。
-2. **20 Hz 定时器**：选择目标源。视觉源在 `target_timeout=0.5 s` 内有新帧时优先使用视觉，否则使用外部引导。
-3. **计算**：每架飞机执行一次 `plan_drone()`：输入校验 → 更新降级级别 → 按级别规划 → 输出约束。
-4. **发布**：`point` 非空时发布 JSON，`stamp` 取该帧规划所用数据的源头时刻（目标采样或己方状态）；没有来源时回落到发布时刻。`point` 为空时不发布。
-5. **中枢处理**：中枢按自身模式和限幅执行。接口 C 中的 `action` 只是标签，中枢不解析。
+## 4. 代码分层
 
-### 分层原因
+| 文件 | 职责 | 边界 |
+|---|---|---|
+| `algorithm_node.py` | 订阅、20 Hz 定时、发布 JSON、记录日志 | 不包含判断逻辑 |
+| `adapter_core.py` | 时间戳过滤、目标缓存、视觉/外部选源、每机运行状态、锚点、payload | 不执行降级和裁剪 |
+| `degrade_policy.py` | 串联输入校验、状态机、分级规划、输出约束 | 不定义动作语义 |
+| `validators.py` | 将输入分类为新鲜、过期、非法、倒退、丢失 | 不决定降级级别 |
+| `degrade_fsm.py` | L0～L3 迁移、滞回、恢复计数 | 不发布点 |
+| `safety_guard.py` | 六步输出约束，顺序固定 | 不修改 action，不重新规划 |
+| `plan_policy.py` | 七种动作的发布规则与原因 | 不执行几何计算 |
+| `plan_types.py` | `PlanResult` 类型与动作分组 | 不包含业务判断 |
+| `plan_params.py` | 参数、默认值、合法性校验 | 其它模块不得硬编码参数 |
+| `algorithm_core.py` | 预测、拦截求解、转弯半径判定、边界裁剪，纯函数 | 不依赖 ROS，不包含动作策略 |
+| `vision_gate.py` | 视觉协方差、测距模式和话题回退 | 不修改坐标 |
+| `launch/algorithm.launch.py` | 41 个启动参数 | 不得隐藏参数 |
 
-- 只有 `algorithm_node.py` 依赖 ROS，其余模块可在无 ROS 环境下运行 pytest。
-- 几何计算、动作策略、异常降级职责独立，修改其中一项不会影响其他两项。
-- 参数集中在 `plan_params.py` 并在启动时校验，配置错误在启动阶段暴露。
+ROS 依赖约束：`src/algorithm_pkg/algorithm_pkg/` 下，`import rclpy` 只允许出现在 `algorithm_node.py`。检查命令：
 
----
+```bash
+grep -rn "import rclpy" src/algorithm_pkg/algorithm_pkg/
+```
 
-## 2. 七种动作的处理规则
+`scripts/p4/`、`scripts/p5/`、`scripts/p7/` 是联调和仿真脚本，可以启动 ROS，不受该约束。
 
-`action` 共 7 个枚举值，来自 `/strategy/cmd`。下表是本包对七种动作的处理约定。
+修改参数时的四处同步点：`plan_params.py`、`launch/algorithm.launch.py`、节点 `declare_parameter`、测试断言。只改一处会造成语义不一致。
 
-| 动作 | 使用场景 | 处理方式 | 是否发点 |
-|---|---|---|---|
-| `TAKEOFF` | 起飞 | 坐标由中枢生成 | 否 |
-| `RETURN` | 返航 | 坐标由中枢生成 | 否 |
-| `HOVER` | 原地悬停 | 发布己方当前位置 | 是 |
-| `TRACK` | 跟踪目标 | 发布目标预测点，不加偏移 | 是 |
-| `INTERCEPT` | 拦截目标 | 发布拦截点；不可达时发布尾随点 | 是 |
-| `ATTACK` | 撞击目标 | 发布拦截点；不可达时不发布规划点，由适配层补保持点 | 视解算结果 |
-| `RESUME_PATROL` | 恢复巡逻 | 接口未定义坐标，不推断 | 否 |
-| 未知动作 | 拼写错误、空值 | 拒绝并记录告警，不修改当前模式 | 否 |
+## 5. 七种动作
 
-### 2.1 `TAKEOFF` / `RETURN`
+`action` 有 7 个枚举值，来自 `/strategy/cmd`。
 
-这两个动作的坐标由中枢生成。本包返回 `takeoff_center_generated` / `return_center_generated`，不发布规划点。
+| 动作 | 处理方式 | 是否发点 |
+|---|---|---|
+| `TAKEOFF` | 坐标由中枢生成 | 否 |
+| `RETURN` | 坐标由中枢生成 | 否 |
+| `HOVER` | 进入时捕获己方位置，之后持续发布固定锚点 | 是 |
+| `TRACK` | 发布目标预测点，不加偏移 | 是 |
+| `INTERCEPT` | 发布拦截点；不可达时发布尾随点 | 是 |
+| `ATTACK` | 发布拦截点；无解时由适配层补保持点 | 视解算结果 |
+| `RESUME_PATROL` | 保持当前模式，不切模式 | 沿用原动作 |
+| 未知动作 | 拒绝并记录告警，不修改当前模式 | 否 |
 
-不在本包生成坐标的原因：起降点取决于中枢的停机坪配置和状态机阶段，本包无法获取这些状态，重复计算会产生第二个坐标来源。
+### HOVER
 
-### 2.2 `HOVER`
+适配层在进入 HOVER 的第一帧捕获己方位置，之后每帧发同一个点，`reason=hover_hold`，`reachable=True`。锚点高度按 `[min_alt, max_alt]` 收边：低于 3 m 抬到 3 m，高于 50 m 压到 50 m。切出 HOVER 时清空锚点，下次进入重新捕获。
 
-《内部分工细节》将 `HOVER` 定义为“指令无人机在当前坐标原地保持不动”。本包直接发布己方当前位置，`reason=hover_hold`，`reachable=True`。
+这样做的原因：中枢收不到新规划点时会保留上一帧最多 2 s。HOVER 持续发固定点可以覆盖中枢保留的上一帧点。中枢侧需要支持 HOVER 读规划点；本包不含中枢代码，联调前确认系统侧已实现。
 
-这样处理的依据：中枢在收不到新规划点时，会保留上一帧最多 2 s。HOVER 期间每帧发布当前位置，可持续覆盖中枢保留的旧点。中枢自身的 HOVER 分支也会发布当前位置，两者不冲突。
+### TRACK
 
-边界条件：
+目标身份未确认，或还没到攻击时机。TRACK 只发布目标的预测位置，不做 standoff 偏移。
 
-- 己方状态未到达时没有当前位置，本帧不发布，`reason=own_invalid`。
-- 己方位置超出包线（`z < min_alt`、`z > max_alt`、`|x|/|y| > max_xy`）时不发布，`reason=hover_out_of_envelope`，避免中枢丢弃该点并产生告警日志。
+原因：中枢的 TRACK 分支在水平距离小于 5 m 时会自行环绕（`center_node.py` 的 `TRACK_SAFE_DIST=5.0`）。本包再减一次安全距离会产生双重偏移。
 
-### 2.3 `TRACK`
+TRACK 的速度由中枢按自身限幅决定。`v_max=4.50` 只作兜底和巡航参考，TRACK 的点不经过该参数。
 
-目标身份尚未确认，或尚未到攻击时机。处理方式是保持跟踪，维持距离。
+### INTERCEPT
 
-约定：**TRACK 只发布目标的预测位置，不做 standoff 偏移**。原因是中枢的 TRACK 分支在水平距离小于 5 m 时会自行执行环绕（`center_node.py:604`，`TRACK_SAFE_DIST=5.0`）。若本包再减去一次安全距离，会产生双重偏移。
+计算目标未来位置。做法是解二次方程，取 `(0, t_go_max]` 内的正根，从早到晚逐个检查动力学可达性，输出第一个可达的拦截点。早根转不过来时继续试晚根。没有任何可达根时输出尾随点：目标运动方向后方 `d_tail=4 m` 处。尾随点 `reachable=False`，也要发布，因为目标下一帧改变方向后可能重新可达。
 
-本包不发布速度指令。TRACK 的速度由中枢按自身限幅决定。`v_max` 运行值是 4.50（学长理论；代码兜底 6.0），TRACK 的点不经过该参数。
-
-### 2.4 `INTERCEPT`
-
-计算目标未来位置，而不是当前位置。做法是求解二次方程，取 `(0, t_go_max]` 内的最早正根，输出拦截点。无解时输出尾随点：目标运动方向后方 `d_tail=4 m` 处。尾随点 `reachable=False`，但仍需发布，因为目标下一帧改变方向后可能重新可达。
-
-`reachable=False` 不代表不发布，这一点容易混淆。
-
-常见无解情况：目标速度更快、目标横穿、目标距离超出 `t_go_max` 可达范围。判定方式是解方程，不使用“目标更快”作为前置条件。
-
-#### 动力学可达性判定（P6）
-
-几何有解不等于飞得到。P6 起，拿到己方速度时多做一层判定：
+动力学可达性判定：
 
 ```text
 R_min(v) = max(v² / a_max, v / omega_max)          # 最小转弯半径
@@ -137,133 +178,66 @@ R_req    = |d| / (2·sin(θ/2))                      # 到拦截点的等半径�
 R_req < R_min  →  动力学不可达
 ```
 
-θ 是己方当前速度方向到拦截方向的转向角，`d` 是到拦截点的位移。
-不可达时按“无解”处理，输出尾随点，`reason=dynamic_infeasible_tail`。
+θ 是己方当前速度方向到拦截方向的转向角，`d` 是到拦截点的位移。所有根都不可达时按无解处理，输出尾随点，`reason=dynamic_infeasible_tail`。
 
 边界条件：
 
-- 调用方没传己方速度 → 跳过判定，行为与 P5 完全一致。
-- 己方速度 < 0.5 m/s → 跳过判定。低速时 `R_min` 趋 0，强行判定会把所有转弯都放过。
-- 判定**只对 INTERCEPT 生效**。ATTACK 末段语义（撞击还是贴近后保持）尚未定案，规划层不改它，详见第 6 节。
+- 调用方没传己方速度时跳过判定。
+- 己方速度小于 0.5 m/s 时跳过判定。低速时 `R_min` 趋 0，强行判定会放过所有转弯。
+- 判定只对 INTERCEPT 生效。
 
-`a_max` 与 `yaw_rate_max` 因此第一次真正参与求解；此前它们只是参数出口。
+### ATTACK
 
-### 2.5 `ATTACK`
+与 INTERCEPT 使用同一方程，速度上限取 `v_max_attack`。区别在无解时的处理：INTERCEPT 退化为尾随点，ATTACK 不退化为尾随点。原因是中枢收到 ATTACK 后会全速飞行，给出目标后方的尾随点会让动作与意图不一致。
 
-与 INTERCEPT 使用同一方程，速度上限取 `v_max_attack`，launch 为 23.59 m/s（学长理论；代码兜底 6.0）。
+ATTACK 不做动力学可达性判定。末段语义（撞击还是贴近后保持）尚未定案，详见“已知限制”。
 
-区别只在无解时的处理：INTERCEPT 退化为尾随点，ATTACK 不退化为尾随点。原因是中枢收到 ATTACK 后会全速飞行，若本包给出目标后方的尾随点，飞行器会全速冲向目标后方，动作与意图不一致。
+ATTACK 无解时，策略层返回 `point=None, reason=attack_no_solution`；适配层补发己方当前位置的保持点，`reason=hold_attack_no_solution`，避免中枢继续使用上一帧的攻击点。
 
-ATTACK **不做**动力学可达性判定。P5 文档第 10.4 节明确写：ATTACK 的末段语义（撞击模式还是贴近后保持）尚未定案；在语义未定时用转弯半径判定顺手改掉它，等于替后续决策做主。实测依据：在 P5 的 4 m/s 横穿数据上回放，严格判定会拒绝 128 帧 ATTACK，最后一帧在命中前 0.4 s，会把已记录的 0.054 m 命中改掉。因此 P6 只判 INTERCEPT。
+### RESUME_PATROL 与未知动作
 
-ATTACK 无解时，策略层返回 `point=None, reason=attack_no_solution`；适配层补发“己方当前位置”的保持点（`reason=hold_attack_no_solution`），避免中枢继续使用上一帧的攻击点。
+`RESUME_PATROL` 在接口里有名字，但没有定义坐标和行为。中枢收到它会告警并保持当前模式，本包也保持原模式，不改模式、不停止发点。
 
-“撞击前解除限幅”由中枢和飞控负责，不在本包。接口 C 的 `action` 不参与中枢控制逻辑，中枢 `plan_callback` 不解析该字段。
+未知动作（拼写错误、空字符串、`None`）返回 `unknown_action` 并记录 warn 日志。不得把未知动作修正为 HOVER。
 
-### 2.6 `RESUME_PATROL`
+### 判定顺序
 
-中枢会下发该模式，但接口未定义对应坐标。本包返回 `resume_patrol_unspecified`，不发布规划点，也不推断坐标。
-
-需要注意：中枢状态机没有 `RESUME_PATROL` 分支，进入该模式后该架飞机不再收到 setpoint。该行为属于中枢实现，不在本包范围内。
-
-### 2.7 未知动作
-
-未知动作（拼写错误、空字符串、`None`）一律返回 `unknown_action` 并记录 warn 日志。
-
-不得将未知动作修正为 HOVER。修正后飞行器会继续执行旧模式，地面无法察觉异常。
-
-### 2.8 动作策略的判定顺序
-
-以下 14 步是 `plan_policy.plan()` 的内部顺序，在 P3 确定降级级别之后执行。P3 的输入校验（包括“己方异常优先”）在更早一层，不在本表中。排查时先确认级别，再对照本表。
+`plan_policy.plan()` 的内部顺序如下，在降级级别确定之后执行：
 
 ```text
  1. 归一化：strip + upper
  2. 不在 7 个枚举内         → unknown_action
- 3. HOVER 且有己方位置       → 当前位置，reason=hover_hold
+ 3. HOVER 且有己方位置       → 固定锚点，reason=hover_hold
  4. HOVER 且无己方位置/越界  → own_invalid / hover_out_of_envelope
  5. TAKEOFF / RETURN        → *_center_generated
- 6. RESUME_PATROL           → resume_patrol_unspecified
+ 6. RESUME_PATROL           → 节点层保持原模式
  7. 无目标                   → target_missing
  8. 目标无效                 → target_invalid
  9. 预测年龄 > max_pred_age  → target_too_old
 10. 己方位置非法             → own_invalid
 11. INTERCEPT/ATTACK 无速度  → velocity_unavailable
-12. 拦截方程无解或动力学不可达 → 尾随点（INTERCEPT）或 attack_no_solution（ATTACK）
+12. 拦截方程无解或不可达     → 尾随点（INTERCEPT）或 attack_no_solution（ATTACK）
 13. 边界裁剪后无有效点       → constraint_rejected
 14. 输出约束拒绝             → guard_* 原因
 ```
 
 两个年龄参数含义不同：
 
-- `max_age=1.0 s`：目标采样超过该年龄后不再用于速度估计（P1）。
-- `max_pred_age=0.5 s`：预测点超过该年龄后不再发布（P2）。
+- `max_age=1.0 s`：目标采样超过该年龄后不用于速度估计。
+- `max_pred_age=0.45 s`：预测点超过该年龄后不发布。
 
-目标年龄在 0.5～1.0 s 之间时进入 L1 外推：L1 将目标按匀速模型外推到当前时刻，构造当前时刻的目标快照后交给 P2，因此 `max_pred_age` 在该层不再拦截。无法外推时（无速度或无采样）退化为保持点或 L3。
+目标年龄在 0.45～1.0 s 之间时进入 L1 外推。L1 把目标按匀速模型外推到当前时刻，再把当前时刻的目标快照交给策略层。
 
----
-
-## 3. 代码分层与职责边界
-
-原则：同一职责只在一个模块中实现。重复实现会产生第二个事实来源。
-
-| 文件 | 职责 | 边界 |
-|---|---|---|
-| `algorithm_node.py` | 订阅、20 Hz 定时、发布 JSON、记录日志 | 不包含判断逻辑 |
-| `adapter_core.py` | 时间戳过滤、目标缓存、视觉/外部选源、每机运行状态、payload 生成 | 不执行降级和裁剪 |
-| `degrade_policy.py` | 串联输入校验、状态机、分级规划、输出约束 | 不定义动作语义 |
-| `validators.py` | 将输入分类为新鲜、过期、非法、倒退、丢失 | 不决定降级级别 |
-| `degrade_fsm.py` | L0～L3 迁移、滞回、恢复计数 | 不发布点 |
-| `safety_guard.py` | 六步输出约束，顺序固定 | 不修改 action，不重新规划 |
-| `plan_policy.py` | 七种动作的发布规则与原因 | 不执行几何计算 |
-| `plan_types.py` | `PlanResult` 类型与动作分组 | 不包含业务判断 |
-| `plan_params.py` | 参数、默认值、合法性校验 | 其他模块不得硬编码参数 |
-| `algorithm_core.py` | 预测、拦截求解、转弯半径判定、边界裁剪，纯函数 | 不依赖 ROS，不包含动作策略 |
-| `launch/algorithm.launch.py` | 33 个启动参数 | 不得隐藏参数 |
-
-### ROS 依赖约束
-
-在 `src/algorithm_pkg/algorithm_pkg/` 下，`import rclpy` 只允许出现在 `algorithm_node.py`。其余模块为纯 Python，单元测试不需要 ROS 环境。
-
-检查命令：
-
-```bash
-grep -rn "import rclpy" src/algorithm_pkg/algorithm_pkg/
-```
-
-`scripts/p4/` 为联调脚本，会启动 ROS 节点，不受该约束限制。
-
-该约束可直接验证：设置 `PYTHONPATH=src/algorithm_pkg` 后，`pytest` 可运行全部 235 项测试，不需要 launch，也不需要中枢节点在线。
-
-### 修改指引
-
-| 需要修改的内容 | 修改位置 | 注意事项 |
-|---|---|---|
-| 速度上限 | `plan_params.py`、`launch`、节点 `declare_parameter`、测试断言 | 四处必须同步，否则语义不一致 |
-| 某动作是否发布规划点 | `plan_policy.py` | 不在节点中增加条件判断 |
-| L1/L2 保持逻辑 | `degrade_policy.py` | 不修改 `degrade_fsm` 的计数逻辑 |
-| 进级/恢复帧数 | `plan_params.py` | 不硬编码 2/3 |
-| 输出约束顺序 | `safety_guard.py` | 顺序不可调整 |
-| 新增话题 | `algorithm_node.py`、`adapter_core.py` | 不将解析逻辑放入节点回调 |
-| 拦截计算 | `algorithm_core.py` | 不在此模块判断动作模式；动力学判定只对 INTERCEPT 生效 |
-
----
-
-## 4. 异常降级与安全约束
-
-目标丢失或己方状态中断时，本包按降级级别决定是否发布规划点。
+## 6. 降级与安全约束
 
 | 级别 | 触发条件 | 输出 | 说明 |
 |---|---|---|---|
 | L0 `NORMAL` | 输入新鲜且合法 | 正常规划点 | 正常追踪 |
-| L1 `EXTRAPOLATING` | 目标短期丢失，时长 ≤ `t_extrap_max` | 外推点，沿用原动作语义 | 目标可能被遮挡 |
-| L2 `HOLDING` | 外推超时，己方状态正常 | 保持点（上一有效点或己方当前位置） | 目标丢失，保持位置 |
-| L3 `NO_PLAN` | 己方状态中断、输入非法、无法降级 | 不发布规划点 | 规划失效，由中枢接管 |
+| L1 `EXTRAPOLATING` | 目标短期丢失，时长不超过 `t_extrap_max` | 外推点，沿用原动作 | 目标可能被遮挡 |
+| L2 `HOLDING` | 外推超时，己方状态正常 | 固定锚点 | 停在进入 L2 时的位置 |
+| L3 `NO_PLAN` | 己方状态中断、输入非法、无法降级 | 默认不发布；目标坏且己方有效时补固定保持点 | 规划失效，由中枢接管 |
 
-只有 L3 不输出规划点。L1、L2 仍发布规划点，但发布的是降级点。恢复时不会直接回到 L0。
-
-L0 下也可能本帧没有可发布的点，例如输出约束拒绝（`guard_*`），或 ATTACK 无解（由适配层补保持点）。这属于单帧拒绝，不是降级。
-
-### 状态迁移
+L1 继续发外推点。L2 在进入时捕获己方位置，之后发同一个固定点，不跟目标点。L3 默认不发布；如果异常来自目标且己方状态有效，适配层补一个固定保持点，用来覆盖中枢保留的上一帧攻击或拦截点。己方状态失效时不补。
 
 ```text
                 连续 n_enter=2 帧异常
@@ -278,61 +252,11 @@ L0 下也可能本帧没有可发布的点，例如输出约束拒绝（`guard_*
          HOLDING ◄── 连续 n_exit=1 帧有效 ──┘
 ```
 
-规则：
+恢复不可跳级。回到 L0 的第一帧，跳变上限临时收紧为 `max_step_recover=0.2 m`，随后用 `n_recover_step=5` 帧逐步放开。
 
-1. 进入更差级别需要连续 `n_enter=2` 帧异常，单帧异常不改变级别。
-2. L1 设有硬上限 `t_extrap_max=1.0 s`，超时立即进入 L2。
-3. 恢复不可跳级：L3 → L2 需要 `n_exit=1` 帧有效，L2 → L0 需要 `n_recover=3` 帧有效。
-4. 回到 L0 的第一帧，跳变上限临时收紧为 `max_step_recover=0.2 m`，随后用 `n_recover_step=5` 帧逐步放开。
+己方异常优先于目标异常：没有己方位置时，即使目标新鲜，也不计算拦截点。
 
-时间戳倒退的帧整帧丢弃，不参与计数，也不改变级别。单帧时间戳异常不应影响滞回状态。
-
-己方异常优先于目标异常：没有己方位置时，即使目标仍然新鲜，也不计算拦截点。
-
-### 关键参数
-
-| 参数 | 默认值 | 单位 | 含义 | 来源 |
-|---|---|---|---|---|
-| `v_max_intercept` | 7.60 | m/s | 拦截速度上限 | 桥接 INTERCEPT 档 0.38×20；本机 14.8 能力内可达 |
-| `v_max_attack` | 14.80 | m/s | 攻击速度上限 | P5 本机实测 `V_max=14.69` 收口；学长理论 23.59 不可达 |
-| `a_max` | 9.79 | m/s² | 最大水平加速度 | P5 本机实测；P6 起参与转弯半径判定 |
-| `yaw_rate_max` | 3.009 | rad/s | 最大偏航角速度 | P5 本机实测 172.4°/s；P6 起参与转弯半径判定 |
-| `v_max` | 4.50 | m/s | 兜底/巡航速度 | 学长 `V_cruise`；本机实测 5.49，保守取 4.50 |
-| `max_step` | 0.74 | m/帧 | 单帧最大跳变 | 14.8 m/s × 0.05 s；桥接按动作分三档 0.225/0.38/0.74 |
-| `max_step_recover` | 0.2 | m/帧 | 恢复第一帧的跳变上限 | 未单独标定 |
-| `t_go_max` | 8.0 | s | 最大拦截时间 | 初值，未标定 |
-| `max_age` | 1.0 | s | 目标采样最大年龄 | 初值，待视觉实测帧率后复核 |
-| `max_pred_age` | 0.5 | s | 预测点最大年龄 | 超过后进入 L1 |
-| `t_extrap_max` | 1.0 | s | L1 外推上限 | 与 `max_age` 对齐 |
-| `ego_timeout` | 1.0 | s | 己方状态最大年龄 | 替代旧参数 `state_timeout` |
-| `min_distance` | 0.5 | m | 目标最小距离 | 见“未确认 / 待决策” |
-| `d_tail` | 4.0 | m | 尾随距离 | 场景 B 实测可用 |
-| `min_alt` / `safe_alt` / `max_alt` | 3 / 5 / 50 | m | 高度边界 | 中枢 `plan_callback` |
-| `max_xy` | 1000 | m | 水平边界 | 中枢 `MAX_XY_DIST` |
-
-> # ! 上表是 P5 最终运行值；学长理论 23.59 / 10.82 / 185.2 只保留在代码常量与注释里作对照。
-> # ! 本机 P5 实测（x500_down_cam，最终参数）：V_cruise 5.49、V_max 15.19、a_max 10.01、yaw 174.2°/s、R_min 3.01 m。
-> # ! 23.59 m/s 在本套 main 仿真不可达，不要拿它当验收目标。
-
-`max_step=0.74` 是 14.8 m/s × 0.05 s。桥接侧 `theory_bridge_params.yaml` 三档是 0.225 / 0.38 / 0.74（4.5 / 7.6 / 14.8 m/s）；算法侧仍是一个单值上限，够覆盖三档但不按动作切换。
-
-历史配置：P4 用 12.4/0.62；P5 曾按负责人要求改成学长理论 23.59/1.1795，2026-11-20 按本机 14.8 实测收口。`PlanParams` 代码兜底仍是 6.0 / 2.0 / 90。
-
-### 理论参数注入
-
-main 的 `px4-rc.params` 和桥接默认值不改，用 `.p5/main_ws` 下的注入文件覆盖：
-
-- `theory_bridge_params.yaml`：桥接 `max_step_default/intercept/attack = 0.225 / 0.38 / 0.74`（ATTACK 按实测 14.8 收口），`max_yaw_rate_deg=185.2`。
-- `px4-rc.theory.params` + `start_px4_theory.sh`：PX4 `MPC_XY_VEL_MAX=26`、`MPC_TILTMAX_AIR=48`、`MPC_ACC_HOR_MAX=12`、`MPC_XY_CRUISE=4.5`、`MPC_YAWRAUTO_MAX=185.2`。
-- `run_p5_theory.sh`：一键拉起 PX4 + Gazebo + 桥接 + 算法 + 中枢。
-
-首次验证：桥接层注入生效，PX4 参数用 MAVSDK 运行时 set 到 26/48/12/4.5/185.2 并读回一致；但 `x500_down_cam` 实测 `V_max=14.69`、`x500` 实测 14.82，仍不到理论 23.59。说明卡点不是参数没注入，而是 main 的模型/控制器上限；main 的 README/参数表/桥接步长仍然对不上。
-
-这些值仍是学长理论值，不是本机实测；跑完要用 `dynamics_calibrator` 复核。
-
-### 时间戳过滤
-
-适配层在入口拦截三类帧：
+时间戳过滤：
 
 | 情况 | 原因 | 处理 |
 |---|---|---|
@@ -340,108 +264,62 @@ main 的 `px4-rc.params` 和桥接默认值不改，用 `.p5/main_ws` 下的注�
 | `stamp > now + 1e-6` | 时钟不同步 | 丢弃，`stamp_future` |
 | `stamp < 上一帧` | 乱序或回灌 | 丢弃，`stamp_reversed` |
 
-被丢弃的帧不进入缓存，也不参与降级计数。己方状态例外：没有时间戳时退回接收时刻判断新鲜度，并记录 warn 日志，因为 E/F 回灌的旧帧会使断流无法检测。
+被丢弃的帧不进入缓存，也不参与降级计数。己方状态例外：没有时间戳时退回接收时刻判断新鲜度，并记录 warn。
 
----
+## 7. 参数
 
-## 5. 外部系统限制与已知问题
+全部参数在 `launch/algorithm.launch.py`，共 41 个。下表是关键运行值。
 
-以下问题的修复位置不在本包，本包在能力范围内做了规避。上真机前应逐项确认。
+| 参数 | 默认值 | 单位 | 含义 | 来源 |
+|---|---:|---|---|---|
+| `v_max` | 4.50 | m/s | 兜底和巡航速度 | 本机实测 5.49，保守取 4.50 |
+| `v_max_intercept` | 7.60 | m/s | 拦截速度上限 | 桥接 INTERCEPT 档 |
+| `v_max_attack` | 12.40 | m/s | 攻击速度上限 | 桥接 ATTACK 档 |
+| `a_max` | 9.79 | m/s² | 最大水平加速度 | 本机实测 |
+| `yaw_rate_max` | 3.009 | rad/s | 最大偏航角速度 | 本机实测 172.4°/s |
+| `t_go_max` | 8.0 | s | 最大拦截时间 | 初值 |
+| `max_age` | 1.0 | s | 目标采样最大年龄 | 初值 |
+| `max_pred_age` | 0.45 | s | 预测点最大年龄 | 0.5 s 边界会抖进 L1，取 0.45 |
+| `t_extrap_max` | 1.0 | s | L1 外推上限 | 与 `max_age` 对齐 |
+| `ego_timeout` | 1.0 | s | 己方状态最大年龄 | 己方状态超时参数 |
+| `min_distance` | 0.5 | m | 目标最小距离 | 实测无抽搐或过冲 |
+| `d_tail` | 4.0 | m | 尾随距离 | 实测可用 |
+| `min_alt` / `safe_alt` / `max_alt` | 3 / 5 / 50 | m | 高度边界 | 与中枢一致 |
+| `max_xy` | 1000 | m | 水平边界 | 与中枢 `MAX_XY_DIST` 一致 |
+| `max_step` | 0.30 | m/帧 | 单帧位移兜底 | 动作专用值优先 |
+| `max_step_track` | 0.14 | m/帧 | TRACK 单帧位移 | 桥接常规档 |
+| `max_step_intercept` | 0.38 | m/帧 | INTERCEPT 单帧位移 | 桥接 INTERCEPT 档 |
+| `max_step_attack` | 0.62 | m/帧 | ATTACK 单帧位移 | 桥接 ATTACK 档 |
+| `max_step_recover` | 0.2 | m/帧 | 恢复第一帧的跳变上限 | 实测保持 0.2 |
+| `vision_use_covariance` | true | - | 订阅带协方差的视觉话题 | 视觉新话题 |
+| `vision_cov_topic` | `/vision/target_pose_cov` | - | 新视觉话题名 | 与视觉包一致 |
+| `vision_cov_max_var` | 100.0 | m² | 允许的最大位置方差 | 超过视为不可信 |
+| `vision_cov_min_z` | 0.0 | m | 目标最低高度 | 地面目标可为 0 |
+| `vision_legacy_timeout` | 0.5 | s | 带协方差话题停多久后回退无协方差话题 | 兼容回退窗口 |
 
-### 5.1 中枢保留旧规划点最多 2 秒
+代码兜底值和 launch 不同：`PlanParams` 的 `v_max` / `v_max_intercept` / `v_max_attack` 兜底是 6.0，`a_max` 是 2.0，`yaw_rate_max` 是 90°/s。这些只用于单元测试和未加载 launch 的调试，不要拿来验收。
 
-现象：本包停止发布后，飞行器仍继续飞行约 2 秒。
+单帧位移按动作分档：TRACK 0.14、INTERCEPT 0.38、ATTACK 0.62，`max_step=0.30` 只作兜底。层级顺序是：动作专用值优先，没有时用 `max_step`。`0` 表示不限幅，只用于调试。
 
-原因：中枢仅在收到新 JSON 时更新 `latest_plan_targets`，超过 2 s 未更新才清空（`center_node.py:455`）。实测保留 1.98 s。
-
-本包的处理：L3 期间不发布规划点；ATTACK 无解时补保持点；`max_step=0.30` 限制保留期间的飞行距离。仿真中 ATTACK 场景的保留期间飞行距离为 0。
-
-影响：`no_plan` 不等于立即停止。验收应按“保留时长 + 量化飞行距离”计算，不能按“立即停止”验收。
-
-### 5.2 `/drone_<id>/state` 存在回灌
-
-现象：桥接中断后，己方状态仍显示为新鲜。
-
-原因：中枢每 20 Hz 将缓存的 `/{drone_id}/state` 重新发布到同名话题（`center_node.py:651`）。本包订阅同名话题，可能收到中枢转发的旧帧。
-
-本包的处理：按 `header.stamp` 判断新鲜度，旧时间戳不覆盖新帧；时间戳为 0 时退回接收时刻并记录告警。
-
-影响：时间戳为 0 的回灌帧无法区分新旧，这是原理性限制，不能通过配置消除。
-
-### 5.3 TRACK 模式下中枢优先使用视觉目标
-
-现象：TRACK 下本包发布的规划点未被执行，飞行器跟随视觉目标。
-
-原因：中枢 TRACK 分支中，`latest_vision_target` 非空时直接使用视觉目标，不读取规划点（`center_node.py:592`）。实测偏差 14.14 m，仿真最大 19.7 m。
-
-本包的处理：无。该行为由中枢策略决定，本包只保证规划点计算正确。
-
-影响：TRACK 场景的验收只能验证本包的输出，不能以飞行器轨迹作为算法验收依据。
-
-### 5.4 `RESUME_PATROL` 与未知动作导致后续无 setpoint
-
-现象：飞行器进入某模式后不再响应。
-
-原因：中枢会记录这两个动作并发布 `/action`，但状态机没有对应分支，此后不再发布 setpoint。
-
-本包的处理：不推断坐标，返回 `no_plan` 并记录告警。
-
-影响：需要中枢负责人补充分支或明确处理规则。
-
-### 5.5 接口 C 的 `action` 不是控制输入
-
-现象：规划消息中的 `action` 不影响中枢限幅。
-
-原因：中枢 `plan_callback` 不解析 `action`，模式仅由 `/strategy/cmd` 驱动，限幅走中枢自身的接口 H。
-
-影响：`action` 目前仅用于选择速度、记录日志和后续扩展。若需要中枢按动作调整限幅，需要修改中枢接口。
-
-### 5.6 两层 `max_step` 同时生效
-
-现象：己方静止时，TRACK 点始终位于 `own + 0.30`，看似未更新。
-
-原因：P2 的 `apply_constraints` 以己方当前位置为基准限制一次；P3 的输出约束再以“上一帧发布的点”为基准限制一次。
-
-本包的处理：两次约束都取更保守的结果，不互相放宽。
-
-影响：这是预期行为。闭环中己方位置持续变化，点会随之推进。排查抖动时需先确认是哪一层在限制。
-
-### 5.7 规划延迟阈值不一致
-
-接口规范第 5 节规定“规划延迟 > 0.5 s 丢弃”，中枢实现为 `max_plan_delay=0.8 s`。JSON 的 `stamp` 已改为源头时刻，中枢用它算出来的就是源头年龄；但阈值 0.8 s 仍不是规范写的 0.5 s。
-
-P5 收口复测（20 Hz 连续规划）：DDS p99 1.69 ms，视觉源→setpoint 最坏 37.46 ms，0.5 s / 0.8 s 都远未到。规范要的“源头时间戳”本包没有写；改不改由负责人定，见 `文档/算法测试基本方法.md` 8.3.1 节。
-
-影响：现网不会误丢，但 0.8 s 也起不到源头新鲜度保护；新鲜度目前靠本包 `max_age` / `max_pred_age` 兜底。
-
-### 5.8 mock 环境的速度上限低于配置
-
-dry bridge 的实际限幅为 10/6/3 m/s；规划 launch 现在按 P5 收口值 4.50/7.60/14.80，代码兜底 6.0。本机 P5 最终参数实测最高 15.19 m/s，不是 23.59。
-
-影响：mock 环境实测的 9.82/5.88/2.94 m/s 是链路能力，不代表飞行器能力，真机需重新标定。
-
----
-
-## 运行
-
-```bash
-ros2 launch algorithm_pkg algorithm.launch.py
-```
-
-启动后默认 `HOVER`，每帧发布己方当前位置（`reason=hover_hold`）。收到 `/strategy/cmd` 的 `TRACK` / `INTERCEPT` / `ATTACK` 后改为发布规划点；`TAKEOFF` / `RETURN` 不发布规划点。典型顺序：先 `TAKEOFF`，再 `TRACK` 或 `INTERCEPT` / `ATTACK`，最后 `RETURN`。
-
-全部参数在 launch 文件中，共 33 个，均有注释。修改速度、边界和降级阈值应修改 launch，不应修改代码中的默认值。
-
-## 接口
+## 8. 接口
 
 订阅：
 
 | 话题 | 类型 | 说明 |
 |---|---|---|
-| `/vision/target_pose` | `geometry_msgs/PoseStamped` | 视觉目标，优先 |
+| `/vision/target_pose_cov` | `geometry_msgs/PoseWithCovarianceStamped` | 新视觉目标，优先；带协方差和测距模式 |
+| `/vision/target_pose` | `geometry_msgs/PoseStamped` | 无协方差视觉目标；带协方差话题超时后回退 |
 | `/external/target_detected` | `geometry_msgs/PoseStamped` | 外部引导，视觉不新鲜时启用 |
 | `/strategy/cmd` | `std_msgs/String` | JSON：`{"drone_id", "action"}` |
-| `/drone_<id>/state` | `nav_msgs/Odometry` | 己方 ENU 位置 |
+| `/drone_<id>/state` | `nav_msgs/Odometry` | 己方 ENU 位置和速度 |
+
+视觉消息约定：
+
+- `orientation.w=1.0` 表示地面投影，`0.5` 表示尺寸估距。
+- 位置方差超过 `vision_cov_max_var`、NaN、未知模式直接丢弃。
+- 带协方差话题只要还在发，无协方差话题就不覆盖；带协方差话题停 `vision_legacy_timeout` 后才回退无协方差话题。
+- 带协方差话题刚接上时清空无协方差话题采样，防止第一帧缓存点混进来。
+- 地面目标 `z=0` 可以进算法；发点由 `apply_constraints` 按动作最低高度处理。
 
 发布：
 
@@ -449,59 +327,80 @@ ros2 launch algorithm_pkg algorithm.launch.py
 |---|---|---|
 | `/planning/target_pose` | `std_msgs/String` | `drone_id`、`stamp`、`x`、`y`、`z`、`action` |
 
-单话题，多机通过 `drone_id` 区分。每架飞机各有一个 publisher，均发布到同一话题。接口 C 即该话题；接口 H 是中枢的限幅接口，本包不涉及。
+单话题，多机通过 `drone_id` 区分。每架飞机各有一个 publisher，均发布到同一话题。接口 C 即该话题。
 
-`stamp` 取该帧规划所用数据的源头时刻：跟踪/拦截/攻击用目标采样的 `stamp`，HOVER 和 ATTACK 保持点用己方状态 `stamp`，L2 保持沿用上一有效点的来源；没有来源时回落到发布时刻。
+`stamp` 取该帧所用数据的源头时刻：
 
-JSON 仅包含上述 6 个字段。`reason`、`level`、`reachable`、`guard_notes` 只出现在节点日志中，不随消息发布。未发布点时，通过日志 `本帧不发点：level=… reason=…` 查询原因。
+- 跟踪、拦截、攻击用目标采样的 `stamp`。
+- HOVER、L2 固定点、L3 保持点和 ATTACK 保持点用当前己方状态的 `stamp`。
+- 没有来源时回落到发布时刻。
 
-## 测试
+JSON 只包含上述 6 个字段。`reason`、`level`、`reachable`、`guard_notes` 只出现在节点日志，不随消息发布。未发点时，通过日志 `本帧不发点：level=… reason=…` 查原因。
 
-```bash
-# 主机，纯 Python
-PYTHONPATH=src/algorithm_pkg /usr/bin/python3 -m pytest -q src/algorithm_pkg/test
+## 9. 已知限制与未决项
 
-# Jazzy / Humble 容器
-colcon test --packages-select algorithm_pkg
-colcon test-result --verbose
-```
+### 外部系统限制
 
-共 235 项，按层分布：
+1. 中枢收不到新规划点时会保留上一帧最多 2 s，实测 1.98 s。本包的 L3 保持点只能覆盖上一帧点，不能取消中枢的保留逻辑。`no_plan` 不等于立即停止。
+2. 中枢 TRACK 分支在视觉目标新鲜时优先使用视觉，不读取规划点。TRACK 场景的飞行轨迹不能作为算法验收依据。
+3. 接口 C 的 `action` 不驱动中枢模式，也不影响中枢限幅。中枢只在 HOVER 时用它筛选规划点。
+4. 两层 `max_step` 同时生效：策略层以己方当前位置为基准限制一次，输出约束再以上一帧发布的点为基准限制一次。两次取更保守的结果。
+5. mock 环境的实际限幅是 10 / 6 / 3 m/s，低于配置值。mock 实测速度不代表飞行器能力。
 
-| 层 | 目录/文件 | 数量 |
+### 跨模块未决项
+
+| ID | 状态 | 说明 |
 |---|---|---|
-| P1 几何 | `test/unit/test_algorithm_core.py` | 38 |
-| P2 策略 | `test/unit/` 的 params/policy/replay | 70 |
-| P3 降级 | `test/unit/` 的 validators/fsm/policy/guard/recovery | 91 |
-| P4 适配 | `test/unit/test_node_adapter.py` | 15 |
-| 情景回归 | `test/scenario/`（7 行为 + 8 定义） | 15 |
-| 多帧仿真 | `test/sim/`（1 多帧 + 5 legacy P3） | 6 |
+| W-02 | 未合入 | 中枢侧需要支持 HOVER 读规划点；本包不含中枢代码，联调前确认系统侧已实现。 |
+| W-05 | 未统一 | 断联 failsafe 时间有 0.5、1.0、1.5、3.0 s 多个口径。 |
+| W-06 | 未统一 | 规范写返航回起飞点，中枢代码飞各自停机坪。 |
+| W-08 | 部分 | 算法支持带协方差的视觉话题；真实视觉未交付，目标高度方案未定。 |
+| W-09 | 部分 | 中枢有动作白名单和 `RESUME_PATROL` 保护；算法没有 GROUND 状态门。 |
+| W-11 | 部分 | `v_max_attack`、分档步长与桥接一致；`a_max` / `yaw_rate_max` 用本机实测 9.79 / 172.4，接口规范给的是理论值 10.82 / 185.2，权威值待团队确认。 |
+| W-12 | 部分 | L2 发固定锚点；`action` 不切 HOVER，恢复时由谁切回原动作未定。 |
 
-情景与多帧测试通过 `--scenario-chart-dir` 输出证据图；unit 测试不加载 matplotlib。
+### 不在本包范围
 
-测试方法、单帧回放、场景仿真的用法见 [文档/算法测试基本方法.md](../../文档/算法测试基本方法.md)。
+- camera relay：因 protobuf 7.x 与 `gz.msgs10` 不兼容，接口 J/K 未交付。本包不修。
+- 6 m/s 横穿目标：追不上。原因是策略层裁剪语义和桥接控制回路的组合，不是 `a_max` / `R_min` 判定。本包不单独修。
+- ATTACK 末段语义未定：撞击还是贴近后保持。定案前不对 ATTACK 加动力学判定。
+- 多机 Gazebo 联调由系统集成方执行。本包只保证同一目标下三机的模式、状态、FSM、锚点和发布互不串。
+- 不做风模型、风速估计和风扰补偿。没有强风测试数据。
+- 不恢复 Gazebo GUI。数据有三个方向的变化时，用 3D 路径图和 x-y 顶视图；Gazebo 截图不能代替过程图。
 
-## 文档
+## 10. 测试
 
-- 本文件：算法包的接口、策略、分层与已知问题。
-- `scripts/p5/scenario_suite.py`：Gazebo 统一场景执行器；`scenario_report.py`：离线看结果表；`scenario_chart.py`：离线出图。场景定义在 `algorithm_pkg/scenario_defs.py`，用法见测试方法文档 8.8 节。
-- [文档/算法测试基本方法.md](../../文档/算法测试基本方法.md)：测试分层、调试方法、必做场景和排查流程。
+测试分五层，详细命令、图表规范和排障方法见 [docs/算法测试基本方法.md](docs/算法测试基本方法.md)。
+
+| 层 | 数量 | 内容 |
+|---|---:|---|
+| 单元测试 | 239 | 几何、策略、降级、护栏、适配、参数、视觉门 |
+| 情景测试 | 20 | 单点行为 7、场景定义 8、视觉门 5 |
+| 多帧仿真 | 8 | 追逃降级、L3 保持、3 条多帧场景、级别覆盖汇总、3D 爬升、双机主攻/警戒 |
+| 联调脚本 | 3 个 | 节点冒烟、失效注入、多机隔离，需要 ROS |
+| 物理仿真 | 4 个场景 + 探针 | PX4/Gazebo 闭环，需要容器 |
+
+情景和多帧测试通过 `scenario_chart` 生成证据图，unit 测试不加载 matplotlib。图型选择、标题、标注和 3D 规则见测试方法第 5 节。测试基线是 `v_max=4.50`、`v_max_intercept=7.60`、`v_max_attack=14.80`、`max_step=0.74`。生产 launch 用 12.40 和分档步长。这条差异是有意的：单元测试覆盖生产参数。
+
+视觉门禁用 `test/support/vision_mock.py` 注入延迟、噪声和丢帧。mock 参数是假设值，不能把 mock 通过写成真实视觉通过。
+
+## 11. 文档与本地复现材料
+
+- 本文件：架构、接口、参数、已知限制。
+- [docs/算法测试基本方法.md](docs/算法测试基本方法.md)：测试分层、调试、图表、Gazebo 验收。
+- [docs/代码注释规范.md](docs/代码注释规范.md)：中文注释、术语和边界写法。
+- [scripts/p4/README.md](scripts/p4/README.md)：ROS 联调脚本。
 - [文档/课题二内部接口规范.md](../../文档/课题二内部接口规范.md)、[课题二-课题三-接口规范.md](../../文档/课题二-课题三-接口规范.md)：上下游接口。
-- [文档/内部分工细节.md](../../文档/内部分工细节.md)：团队分工与物理参数依据。
-- [文档/Jazzy开发与Humble交付指南.md](../../文档/Jazzy开发与Humble交付指南.md)：Docker/Humble 环境、P5 SITL 启动。
+- [文档/内部分工细节.md](../../文档/内部分工细节.md)：团队分工和物理参数依据。
+- [docs/Jazzy开发与Humble交付指南.md](docs/Jazzy开发与Humble交付指南.md)：Docker/Humble 环境和 PX4 SITL。
+- `docs/figures/`：4 张参考图，手工出图，不参与测试。
 
-## 未确认 / 待决策（P5 收口 + P6）
+`.p5/` 是本地仿真工作区，不随包交付。当前证据图在 `.p5/evidence/charts`，验收日志在 `.p5/evidence/clean_env`，旧材料归档在 `.p5/archive`。文档里的 `.p5/` 路径只用于本机复现；拿到包后按交付版命令准备环境。
 
-- 接口 C 的 `stamp`：已按规范改成源头时刻（2026-11-20，P5 收口时 214 项测试）。中枢 `max_plan_delay=0.8 s` 现在校验的是源头年龄；复测正常规划源头年龄 12～37 ms，不会触发丢弃；L1 外推超过 0.8 s 的帧会被中枢丢弃，保持点仍由中枢重发。阈值 0.5 还是 0.8 仍需 main 统一。
-- `V_max`：已按本机 `x500_down_cam` 实测 14.69 收口到 launch 的 14.80，动力学复测峰值 15.19（约 2.6% 超调）。学长理论 23.59 在这套 main 仿真不可达，只保留常量作参考。
-- `a_max` / `yaw_rate_max`：launch 用本机实测 9.79 / 172.4°/s；`PlanParams` 代码兜底仍是 2.0 / 90°/s。
-- `max_step=0.74`：对应 ATTACK 档 14.8 m/s；桥接三档 0.225/0.38/0.74。算法侧仍是单值上限，够用但不按动作切换。
-- `min_distance=0.5 m`：最终参数 ATTACK 固定目标最近 0.090 m，没有抽搐或过冲；保持 0.5。
-- `max_step_recover=0.2 m/帧`：最终参数 L2→NORMAL 恢复首帧实测 0.200 m，随后放开到 0.605 m；保持 0.2。
-- 高速横穿 4 m/s：最近 0.030 m，命中；P5 判定“不需要 a_max/R_min 修正”，P6 按规范 §4 仍补上了判定，但只对 INTERCEPT 生效，回放 P5 数据零行为改变。6 m/s 目标追不上（最近 9.939 m）：P2 的 `max_step` 按“离己方位置”裁剪，规划点只领先 0.74 m，桥接 P 项只有约 1.33 m/s，实际追速约 4～6 m/s。这是 P2 裁剪语义 + main 控制回路的组合，不是 a_max/R_min，也不是桥接档位没生效。
-- 动力学可达性判定（P6）：已接入 INTERCEPT，`reason=dynamic_infeasible_tail`；不传己方速度或速度 <0.5 m/s 时跳过。**ATTACK 未接入**，因为末段语义未定案，且严格判定会拒绝 P5 已记录命中的前 0.4 s 帧。容器内四场景复跑（2026-11-22）：`intercept_cross_4` 0.089 m、`cross_attack_4` 0.055 m（P5 记 0.054 m）、`intercept_uturn` 闭环触发 134 帧、`intercept_cross_6` 5.454 m 仍 MISS。
-- `R_min` 是速度相关量，不是常数：`R_min(v)=max(v²/a_max, v/ω)`，分界速度 `a_max/ω=3.25 m/s`。README 早前记的实测 `R_min≈3.01 m` 反解出 v=5.43 m/s，与巡航实测 5.49 接近，推断是巡航速度下的值。
-- 规划频率：连续规划实测 20.01 Hz，定时器正常。之前 10 Hz 是“追慢目标→距离过近→本包停发点”造成的统计假象，不是定时器问题。
-- 真机可达速度：P5 数据只覆盖 Gazebo 的 `x500`/`x500_down_cam`，不是真机。
-- 3D：2026-11-21 驱动更新失败，已放弃；观察与汇报改用 2D 图表，见 `文档/算法测试基本方法.md` 8.4 节。
-- 远端 RETURN 在 2026-11-20 复核有效（69.94 m→-0.41 m，20 s；前 2 s 有 1.4 m 惯性外冲），原“不动作”未复现；camera relay 的 protobuf 7.x 仍未解决。
+## 12. 未完成事项
+
+1. **最新 main 尚未合入。** 当前包单独验收；main 还有中枢 HOVER 读规划点、带协方差视觉、防撞消抖、桥接断链 RTL 和三机启动器。合并后需要重新跑中枢/视觉联调。另有 `px4_msgs` 与本地 PX4 v1.17 的字段差异：直接用 latest main 的 `px4_msgs` 配 v1.17 会出现 RTPS 长度错误，合并时一并处理。
+2. **双机正式配置未落库。** 中枢、桥接和算法仍按 `drone_1..3` 启动；双机基线是用临时 2 架 PX4、2 路桥接和 3 机节点（drone_3 静默）跑通的，还没有正式的 2 机 launch 和双机探针。
+3. **TRACK 分工未定。** 中枢 TRACK 使用全局视觉点并加切向环绕，算法规划点不参与 TRACK 控制；双机同目标需要先定主攻/警戒或环绕归属。当前双机测试只覆盖“主攻 ATTACK + 警戒 HOVER”。
+4. **真实视觉未打通。** camera relay（P5-01）仍因 protobuf 与 `gz.msgs10` 不兼容而阻塞；视觉门测试用 mock，真实视觉下的双机不能验收。
+5. **三机/多机 Gazebo 不在本包范围。** 三机由中枢负责；本包只保证同一目标下各机的模式、状态、FSM、锚点和发布互不串。

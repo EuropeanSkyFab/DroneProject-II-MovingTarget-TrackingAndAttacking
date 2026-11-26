@@ -72,6 +72,18 @@ def scenario_chart(request):
 
 
 @pytest.fixture
+def dual_chart(request):
+    """双机主攻/警戒证据图，按用例名输出一张图。"""
+    from support.scenario_chart import DualChart
+
+    out_dir = request.config.getoption("--scenario-chart-dir")
+    chart = DualChart(request.node.name, out_dir)
+    yield chart
+    for path in chart.save():
+        _CHARTS.append(path)
+
+
+@pytest.fixture
 def measured(request):
     """返回一个函数：测试成功时把“测出的值”写入摘要。"""
 

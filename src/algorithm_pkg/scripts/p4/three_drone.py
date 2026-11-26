@@ -1,4 +1,4 @@
-"""P4 三机隔离探针：1 个 algorithm_node（drone_1/2/3），验证不同飞机之间互不影响。
+"""三机隔离探针：1 个 algorithm_node（drone_1/2/3），验证不同飞机之间互不影响。
 
 0.5  三机都发 TRACK
 2.0-4.0  停发 drone_2 的 state（应只影响 drone_2，进 NO_PLAN）
@@ -98,7 +98,7 @@ def main():
     while node.now() < END_AT:
         rclpy.spin_once(node, timeout_sec=0.05)
 
-    log = open(os.environ.get("P4_LOG", "algo.log"), "r", encoding="utf-8", errors="replace").read()
+    log = open(os.environ.get("INTEGRATION_LOG", "algo.log"), "r", encoding="utf-8", errors="replace").read()
     checks = []
 
     def add(name, ok, detail):

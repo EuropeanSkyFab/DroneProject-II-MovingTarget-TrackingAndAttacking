@@ -5,7 +5,7 @@
 
 ```bash
 PYTHONPATH=src/algorithm_pkg /usr/bin/python3 \
-    src/algorithm_pkg/scripts/p5/scenario_report.py --dir .p5/final_run/p6
+    src/algorithm_pkg/scripts/p5/scenario_report.py --dir .p5/evidence/scenarios
 ```
 
 指标口径与执行器完全一致：都用 ``scenario_defs.evaluate`` 与
@@ -145,7 +145,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(description="查看已落盘的场景结果")
     parser.add_argument(
         "--dir",
-        default=os.environ.get("P6_OUT_DIR", ".p5/final_run/p6"),
+        default=os.environ.get("SCENARIO_OUT_DIR", ".p5/evidence/scenarios"),
         help="CSV 目录",
     )
     parser.add_argument("--id", default="", help="场景 id，逗号分隔；默认全部")

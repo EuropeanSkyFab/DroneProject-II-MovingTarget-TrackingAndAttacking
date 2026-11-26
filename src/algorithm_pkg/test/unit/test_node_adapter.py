@@ -6,7 +6,7 @@
 运行：
 
     PYTHONPATH=src/algorithm_pkg python3 -m pytest -q \
-        src/algorithm_pkg/test/test_node_adapter.py
+        src/algorithm_pkg/test/unit/test_node_adapter.py
 """
 
 from __future__ import annotations
@@ -177,7 +177,7 @@ def test_choose_target_falls_back_to_external(measured):
 
 
 def test_payload_falls_back_to_now_without_source(measured):
-    """场景：结果没有 source_stamp（兼容旧调用），发布时刻 now=123.456。
+    """场景：结果没有 source_stamp（兼容直接调用），发布时刻 now=123.456。
 
     预期：接口 C 的 stamp 回落到 123.456，不抛异常。
     """
@@ -191,6 +191,14 @@ def test_payload_falls_back_to_now_without_source(measured):
     )
     data = payload("drone_1", 123.456, result)
     measured(f"payload={data}")
+    assert set(data) == {
+        "drone_id",
+        "stamp",
+        "x",
+        "y",
+        "z",
+        "action",
+    }
     assert data["stamp"] == pytest.approx(123.456)
     assert data["x"] == pytest.approx(1.0)
     assert data["drone_id"] == "drone_1"

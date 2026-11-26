@@ -1,4 +1,4 @@
-"""P5/P6 场景注册表：场景参数、目标轨迹、判定标准。
+"""场景注册表：场景参数、目标轨迹、判定标准。
 
 本模块刻意不依赖 ROS，宿主机可以直接 pytest。ROS 执行器在
 ``scenario_suite.py``，它只负责把这里的定义跑起来、写 CSV。
@@ -112,7 +112,7 @@ def _fly_past_track() -> tuple[Segment, ...]:
     """目标从 (20,0,8) 沿 -x 迎面飞过己方，制造一次掉头需求。
 
     己方在原点附近追上去之后，目标已经跑到身后并继续远离，
-    此时若还去追，需要接近 180° 的转向——这正是 P6 要拦的情况。
+    此时若还去追，需要接近 180° 的转向；动力学判定应拦下这种情况。
     """
     return (
         Segment(0.0, (20.0, 0.0, 8.0), (0.0, 0.0, 0.0)),
@@ -124,24 +124,24 @@ SCENARIOS: tuple[Scenario, ...] = (
     Scenario(
         id="intercept_cross_4",
         title="4 m/s 横穿，纯 INTERCEPT",
-        purpose="P6 动力学判定在正常拦截中不能误拒；对照 P5 的 0.030 m 命中",
+        purpose="动力学判定在正常拦截中不能误拒；对照 0.030 m 命中",
         track=_crossing_track(4.0),
         mode="INTERCEPT",
         run_sec=55.0,
         expect="HIT",
-        note="P5 8.3.3 同口径",
+        note="同口径实测",
     ),
     Scenario(
         id="cross_attack_4",
         title="4 m/s 横穿 + 10 m 切 ATTACK",
-        purpose="复现 P5 第 10 章基线；ATTACK 未接入动力学判定，行为应保持",
+        purpose="复现横穿 + ATTACK 基线；ATTACK 不接入动力学判定",
         track=_crossing_track(4.0),
         mode="INTERCEPT",
         switch_mode="ATTACK",
         switch_dist=10.0,
         run_sec=55.0,
         expect="HIT",
-        note="P5 第 10 章同口径（0.054 m）",
+        note="同口径实测（0.054 m）",
     ),
     Scenario(
         id="intercept_uturn",
@@ -156,12 +156,12 @@ SCENARIOS: tuple[Scenario, ...] = (
     Scenario(
         id="intercept_cross_6",
         title="6 m/s 横穿（已知追不上）",
-        purpose="记录 P5-02 支持边界；本轮修复不包含它",
+        purpose="记录 6 m/s 目标的支持边界；本包不修",
         track=_crossing_track(6.0),
         mode="INTERCEPT",
         run_sec=45.0,
         expect="MISS",
-        note="P5-02 未修，期望 MISS",
+        note="6 m/s 目标不支持，期望 MISS",
     ),
 )
 

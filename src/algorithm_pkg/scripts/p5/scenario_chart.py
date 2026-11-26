@@ -5,11 +5,11 @@
 另有一张四场景汇总图。用法：
 
 ```bash
-MPLCONFIGDIR=/tmp/mplconfig .p5/charts_venv/bin/python \
+MPLCONFIGDIR=/tmp/mplconfig PYTHONPATH=src/algorithm_pkg python3 \
     src/algorithm_pkg/scripts/p5/scenario_chart.py
 ```
 
-图是产物，和 build 同类，不入库：默认输出 `.p5/final_run/p6/figures/`。
+图是产物，和 build 同类，不入库：默认输出 `.p5/evidence/scenarios/figures/`。
 
 配色沿用第 9.4 节约定：绿=命中/PASS，红=失败/超限，橙=ATTACK/风险，
 蓝=正常，灰=辅助。
@@ -240,7 +240,7 @@ def _plot_scenario(
     )
     figure.text(
         0.01, 0.015,
-        f"数据：.p5/final_run/p6/{scenario.id}_state.csv（50 Hz）与 _plan.csv（20 Hz）　"
+        f"数据：.p5/evidence/scenarios/{scenario.id}_state.csv（50 Hz）与 _plan.csv（20 Hz）　"
         f"最近 {metrics.min_dist:.3f} m，过冲 {metrics.overshoot:.2f} m，"
         f"Vmax {metrics.max_speed:.2f} m/s。场景结束切 HOVER，之后目标继续飞，"
         f"距离增大不代表失败。",
@@ -285,7 +285,7 @@ def _plot_dashboard(rows, out_path: str) -> None:
             color=GREEN if item["metrics"].min_dist < THRESHOLD else ORANGE,
         )
     figure.suptitle(
-        "P6 四场景：离目标距离随时间（红虚线=0.5 m 命中门限，灰虚线=场景结束）",
+        "四场景：离目标距离随时间（红虚线=0.5 m 命中门限，灰虚线=场景结束）",
         fontsize=13.5, fontweight="bold", x=0.01, ha="left",
     )
     figure.text(
@@ -300,8 +300,8 @@ def _plot_dashboard(rows, out_path: str) -> None:
 
 def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(description="把场景 CSV 画成图")
-    parser.add_argument("--dir", default=".p5/final_run/p6", help="CSV 目录")
-    parser.add_argument("--out", default=".p5/final_run/p6/figures", help="图片输出目录")
+    parser.add_argument("--dir", default=".p5/evidence/scenarios", help="CSV 目录")
+    parser.add_argument("--out", default=".p5/evidence/scenarios/figures", help="图片输出目录")
     parser.add_argument("--id", default="", help="场景 id，逗号分隔；默认全部")
     args = parser.parse_args(argv)
 

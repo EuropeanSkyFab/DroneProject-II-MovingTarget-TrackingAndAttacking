@@ -2,7 +2,8 @@
 
 订阅：
 
-- ``/vision/target_pose``（``geometry_msgs/PoseStamped``）：视觉目标，优先；
+- ``/vision/target_pose_cov``（``geometry_msgs/PoseWithCovarianceStamped``）：视觉目标，优先；
+- ``/vision/target_pose``（``geometry_msgs/PoseStamped``）：无协方差视觉话题，兼容回退；
 - ``/external/target_detected``（``geometry_msgs/PoseStamped``）：视觉不新鲜时兜底；
 - ``/strategy/cmd``（``std_msgs/String`` JSON）：``drone_id`` + ``action``；
 - ``/drone_<id>/state``（``nav_msgs/Odometry``）：己方 ENU 位置与源时间戳。
@@ -19,12 +20,12 @@ ROS 参数（launch 里的默认值）：
 ====================================  =========  ==========================================
 ``drone_ids``                         drone_1..3  必须与中枢 ``swarm_config`` 一致
 ``publish_rate_hz``                   20.0       规划定时器频率，Hz
-# ! 下面是节点兜底默认值；launch 现在用 P5 本机实测收口值：
-# ! 4.50 / 7.60 / 14.80 m/s、9.79 m/s²、3.009 rad/s（172.4°/s）。
-# ! 理论值不是本机实测，P5 实测见 文档/算法测试基本方法.md 第 8 章。
+# ! 下面是节点兜底默认值；launch 使用当前运行值：
+# ! 4.50 / 7.60 / 12.40 m/s、9.79 m/s²、3.009 rad/s（172.4°/s）。
+# ! 速度与单帧位移已按桥接档位对齐；参数来源见 README 参数表。
 ``v_max``                             6.0        兜底；launch 用 4.50
 ``v_max_intercept``                   6.0        兜底；launch 用 7.60
-``v_max_attack``                      6.0        兜底；launch 用 14.80
+``v_max_attack``                      6.0        兜底；launch 用 12.40
 ``a_max``                             2.0        兜底；launch 用 9.79
 ``yaw_rate_max``                      1.5708     兜底；launch 用 3.009
 ``t_go_max``                          8.0        最大拦截时间，s
@@ -37,8 +38,13 @@ ROS 参数（launch 里的默认值）：
 ``safe_alt``                          5.0        TRACK/INTERCEPT 最低高度，m
 ``max_alt``                           50.0       最高高度，m
 ``max_xy``                            1000.0     水平边界，m
-``max_step``                          0.30       单帧最大跳变，m；launch 用 0.74；0 表示不限制
+``max_step``                          0.30       单帧最大跳变兜底，m；launch 用动作专用值
 ``target_timeout``                    0.5        视觉/外部源切换阈值，s
+``vision_use_covariance``             true       是否订阅带协方差的视觉话题
+``vision_cov_topic``                  cov 话题   带协方差视觉话题名
+``vision_cov_max_var``                100.0      允许的最大位置方差，m²
+``vision_cov_min_z``                  0.0        目标最低高度，m；地面目标可为 0
+``vision_legacy_timeout``             0.5        带协方差话题停多久后回退无协方差话题，s
 ``history_sec``                       3.0        目标采样窗口，s
 ``default_action``                    HOVER      未收到战术指令时的模式
 ``t_extrap_max``                      1.0        P3 外推上限，s
@@ -51,7 +57,7 @@ ROS 参数（launch 里的默认值）：
 ``freq_anomaly_threshold``            0.5        丢帧率阈值
 ``freq_window_size``                  20         丢帧率窗口
 ``hold_point_source``                 last_valid L2 保持点来源
-``ego_timeout``                       1.0        己方状态最大年龄，s；替代旧 state_timeout
+``ego_timeout``                       1.0        己方状态最大年龄，s
 ``target_min_alt``                    0.0        目标输入最低高度，m
 ====================================  =========  ==========================================
 """
@@ -64,7 +70,7 @@ from math import isfinite
 from typing import Dict, Optional
 
 import rclpy
-from geometry_msgs.msg import PoseStamped
+from geometry_msgs.msg import PoseStamped, PoseWithCovarianceStamped
 from nav_msgs.msg import Odometry
 from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
@@ -80,8 +86,9 @@ from algorithm_pkg.adapter_core import (
     should_publish,
 )
 from algorithm_pkg.plan_params import PlanParams
-from algorithm_pkg.plan_types import PLAN_ACTIONS
+from algorithm_pkg.plan_types import PLAN_ACTIONS, mode_after_command
 from algorithm_pkg.validators import CmdCode, validate_cmd
+from algorithm_pkg.vision_gate import legacy_vision_allowed, validate_vision_sample
 
 
 @dataclass(frozen=True)
@@ -130,10 +137,44 @@ class AlgorithmNode(Node):
             self.declare_parameter("default_action", "HOVER").value
         ).strip().upper()
 
+        # 视觉兼容参数：带协方差话题优先，无协方差话题在超时后回退。
+        self._vision_use_covariance = bool(
+            self.declare_parameter("vision_use_covariance", True).value
+        )
+        self._vision_cov_topic = str(
+            self.declare_parameter(
+                "vision_cov_topic", "/vision/target_pose_cov"
+            ).value
+        )
+        self._vision_cov_max_var = float(
+            self.declare_parameter("vision_cov_max_var", 100.0).value
+        )
+        self._vision_cov_min_z = float(
+            self.declare_parameter("vision_cov_min_z", 0.0).value
+        )
+        self._vision_legacy_timeout = float(
+            self.declare_parameter("vision_legacy_timeout", 0.5).value
+        )
+        self._last_vision_cov_seen: Optional[float] = None
+
         # ! max_step 默认 0.30 = 宪章 V_max 6.0 m/s × 0.05s。
         # ! 0 仍保留为“不限幅”的兼容入口；联调/交付不要用 0。
         max_step_value = float(self.declare_parameter("max_step", 0.30).value)
         max_step = max_step_value if max_step_value > 0.0 else None
+
+        # 按动作分档的单帧位移上限；0 仍表示不限幅。
+        step_track = float(
+            self.declare_parameter("max_step_track", 0.14).value
+        )
+        step_intercept = float(
+            self.declare_parameter("max_step_intercept", 0.38).value
+        )
+        step_attack = float(
+            self.declare_parameter("max_step_attack", 0.62).value
+        )
+        max_step_track = step_track if step_track > 0.0 else None
+        max_step_intercept = step_intercept if step_intercept > 0.0 else None
+        max_step_attack = step_attack if step_attack > 0.0 else None
 
         # ! launch 会覆盖成学长理论值；这里只是节点兜底，理论值不是本机实测。
         self._params = PlanParams(
@@ -158,6 +199,9 @@ class AlgorithmNode(Node):
             max_alt=float(self.declare_parameter("max_alt", 50.0).value),
             max_xy=float(self.declare_parameter("max_xy", 1000.0).value),
             max_step=max_step,
+            max_step_track=max_step_track,
+            max_step_intercept=max_step_intercept,
+            max_step_attack=max_step_attack,
             max_pred_age=float(
                 self.declare_parameter("max_pred_age", 0.5).value
             ),
@@ -211,6 +255,13 @@ class AlgorithmNode(Node):
             self._on_vision,
             10,
         )
+        if self._vision_use_covariance:
+            self.create_subscription(
+                PoseWithCovarianceStamped,
+                self._vision_cov_topic,
+                self._on_vision_cov,
+                10,
+            )
         self.create_subscription(
             PoseStamped,
             "/external/target_detected",
@@ -248,8 +299,12 @@ class AlgorithmNode(Node):
     # 订阅回调：只做消息→纯 Python 输入的搬运
     # ------------------------------------------------------------------
     def _on_vision(self, msg: PoseStamped) -> None:
-        """接收视觉目标；非法时间戳帧直接丢弃。"""
+        """接收无协方差视觉话题；带协方差话题在线时由新回调负责。"""
         now = self._now()
+        if not legacy_vision_allowed(
+            now, self._last_vision_cov_seen, self._vision_legacy_timeout
+        ):
+            return
         point = (
             float(msg.pose.position.x),
             float(msg.pose.position.y),
@@ -259,6 +314,51 @@ class AlgorithmNode(Node):
         if problem is not None:
             self.get_logger().warn(
                 f"丢弃视觉帧：{problem}",
+                throttle_duration_sec=1.0,
+            )
+
+    def _on_vision_cov(self, msg: PoseWithCovarianceStamped) -> None:
+        """接收带协方差的视觉目标；先过协方差和测距模式门。"""
+        now = self._now()
+        # 带协方差话题刚接上或从无协方差话题回退后恢复：清掉无协方差
+        # 话题留下的采样，避免缓存点在第一帧混进来、再按 max_age 继续用一秒。
+        previous = self._last_vision_cov_seen
+        if (
+            previous is None
+            or not (
+                0.0 <= now - previous <= self._vision_legacy_timeout
+            )
+        ):
+            self._vision = TargetBuffer(history_sec=self._history_sec)
+        # 只要带协方差话题还在发，无协方差话题就不覆盖；即使这一帧被门拒绝。
+        self._last_vision_cov_seen = now
+
+        pose = msg.pose.pose
+        point = (
+            float(pose.position.x),
+            float(pose.position.y),
+            float(pose.position.z),
+        )
+        mode = float(pose.orientation.w)
+        ok, reason = validate_vision_sample(
+            point,
+            msg.pose.covariance,
+            mode,
+            self._vision_cov_max_var,
+            self._vision_cov_min_z,
+            self._params.max_alt,
+        )
+        if not ok:
+            self.get_logger().warn(
+                f"丢弃带协方差的视觉帧：{reason}，mode={mode:.1f}",
+                throttle_duration_sec=1.0,
+            )
+            return
+
+        problem = self._vision.offer(self._stamp_of(msg), point, now)
+        if problem is not None:
+            self.get_logger().warn(
+                f"丢弃带协方差的视觉帧：{problem}",
                 throttle_duration_sec=1.0,
             )
 
@@ -338,9 +438,17 @@ class AlgorithmNode(Node):
             return
 
         previous = self._modes[drone_id]
-        self._modes[drone_id] = status.action
+        new_mode = mode_after_command(previous, status.action)
+        if new_mode == previous and status.action != new_mode:
+            self.get_logger().warn(
+                f"{drone_id} 收到 {status.action}（预留态，暂无实现），"
+                f"保持当前模式 {previous}",
+                throttle_duration_sec=2.0,
+            )
+            return
+        self._modes[drone_id] = new_mode
         self.get_logger().info(
-            f"{drone_id} 模式切换：{previous}->{status.action}"
+            f"{drone_id} 模式切换：{previous}->{new_mode}"
         )
 
     # ------------------------------------------------------------------

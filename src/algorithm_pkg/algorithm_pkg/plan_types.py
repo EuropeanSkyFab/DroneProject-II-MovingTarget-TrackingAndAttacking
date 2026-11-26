@@ -28,6 +28,19 @@ DEFERRED_ACTIONS = ("RESUME_PATROL",)
 
 ALL_ACTIONS = CENTER_ACTIONS + PLAN_ACTIONS + DEFERRED_ACTIONS
 
+
+def mode_after_command(current: str, action: str) -> str:
+    """收到合法动作后应保持的模式。
+
+    中枢 main 收到 ``RESUME_PATROL`` 会告警并保持原模式；算法侧必须
+    同样处理，否则会出现“中枢还在 TRACK、算法已经静默”的分叉。
+    其他动作原样返回归一化后的名字。
+    """
+    normalized = str(action).strip().upper()
+    if normalized in DEFERRED_ACTIONS:
+        return str(current).strip().upper()
+    return normalized
+
 # P3 降级级别。P2 直接调用 plan() 时结果固定为 NORMAL；
 # P3 的 wrapper 才会填 EXTRAPOLATING / HOLDING / NO_PLAN。
 DEGRADE_LEVELS = ("NORMAL", "EXTRAPOLATING", "HOLDING", "NO_PLAN")

@@ -207,7 +207,7 @@ def apply_safety_guard(
     elif recovering:
         limit = params.max_step_recover
     else:
-        limit = params.max_step
+        limit = params.max_step_for(action)
 
     if p_prev is not None and _finite_vec(p_prev) and limit is not None:
         delta = (

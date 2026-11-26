@@ -365,6 +365,39 @@ def test_fast_crossing_target_is_unreachable(measured):
     )
 
 
+def test_intercept_tries_later_root_when_earliest_infeasible(measured):
+    """场景：拦截方程有两个正根，较早根转不过来，较晚根动力学可达。
+
+    操作：调用 solve_intercept()，mode=INTERCEPT，v_max=5.813，
+          own_velocity=(5.274,0,0)，a_max=2.0，omega_max=pi/2。
+    输入：own=(0,0,10)，target=(15.93,20.625,10)，
+          v_t=(-6.474,-6.82,0)。正根约 1.727 s 和 7.196 s；
+          1.727 s 的拦截点需要急转，7.196 s 的根可达。
+    预期：reachable=True，t_go≈7.196 s；不能直接退尾随点。
+    """
+    target = make_state((15.93, 20.625, 10.0), (-6.474, -6.82, 0.0))
+    result = solve_intercept(
+        (0.0, 0.0, 10.0),
+        target,
+        5.813,
+        own_velocity=(5.274, 0.0, 0.0),
+        a_max=2.0,
+        omega_max=1.5707963267948966,
+    )
+
+    assert result.reachable
+    assert result.reason == "intercept_point"
+    assert result.t_go == pytest.approx(7.196, abs=5e-3)
+    assert result.point == pytest.approx(
+        (-30.659, -28.454, 10.0), abs=1e-2
+    )
+
+    measured(
+        f"reachable=True, t_go={result.t_go:.3f}s, "
+        f"point={fmt_vec(result.point)}"
+    )
+
+
 def test_intercept_dynamic_infeasible_uses_tail(measured):
     """场景：目标在己方身后 2 米、同向慢移，几何有解但要求瞬间掉头。
 
@@ -404,7 +437,7 @@ def test_attack_ignores_turn_radius_gate(measured):
     输入：own=(0,0,10)，target=(-2,0,10)，v_t=(0.5,0,0)。
     预期：reachable=True，reason=intercept_point；
           ATTACK 不做动力学判定——它的末段语义（撞击还是贴近后保持）
-          P5 尚未定案，规划层不能顺手改掉。
+          语义尚未定案，规划层不能顺手改掉。
     """
     target = make_state((-2.0, 0.0, 10.0), (0.5, 0.0, 0.0))
     result = solve_intercept(
@@ -424,7 +457,7 @@ def test_attack_ignores_turn_radius_gate(measured):
 
 
 def test_intercept_without_ego_velocity_skips_dynamics(measured):
-    """场景：没提供己方速度时，动力学判定必须跳过，行为与 P5 完全一致。
+    """场景：没提供己方速度时，动力学判定必须跳过，跳过判定。
 
     操作：调用 solve_intercept()，mode=INTERCEPT，v_max=4，不传 own_velocity。
     输入：own=(0,0,10)，target=(-2,0,10)，v_t=(0.5,0,0)（掉头几何）。
